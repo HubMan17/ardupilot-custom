@@ -230,6 +230,13 @@ public:
     // returns false if Absolute aiding and GPS is being used or if the origin is already set
     bool setOriginLLH(const Location &loc);
 
+    // Force-reset the EKF position to the given location.
+    // Sets origin if not yet valid. Resets covariance and clears posTimeout.
+    bool forcePositionReset(const Location &loc, float posAccuracy);
+
+    // Force-set wind state. windN/windE in m/s (NED), windAccuracy sets covariance.
+    bool forceWindReset(float windN, float windE, float windAccuracy);
+
     // return estimated height above ground level
     // return false if ground height is not being estimated.
     bool getHAGL(float &HAGL) const;
@@ -1096,6 +1103,7 @@ private:
     uint32_t ekfStartTime_ms;       // time the EKF was started (msec)
     Vector2F lastKnownPositionNE;   // last known position
     float lastKnownPositionD;       // last known height
+    bool _has_forced_position;      // true after forcePositionReset — enables position reporting in AID_NONE
     uint32_t lastLaunchAccelTime_ms;
     ftype velTestRatio;             // sum of squares of GPS velocity innovation divided by fail threshold
     ftype posTestRatio;             // sum of squares of GPS position innovation divided by fail threshold

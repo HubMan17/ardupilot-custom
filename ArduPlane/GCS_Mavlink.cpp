@@ -972,7 +972,46 @@ MAV_RESULT GCS_MAVLINK_Plane::handle_command_int_packet(const mavlink_command_in
         }
 #endif
         return MAV_RESULT_FAILED;
-        
+
+    case 43210: {
+        // Custom: Force EKF position reset from companion computer
+        // param1: position accuracy (meters), 0 = default 5.0
+        // x: latitude (degE7), y: longitude (degE7), z: altitude (not used)
+        Location loc;
+        loc.lat = packet.x;
+        loc.lng = packet.y;
+        loc.alt = int32_t(packet.z * 100);  // meters to cm
+        loc.relative_alt = (packet.frame == MAV_FRAME_GLOBAL_RELATIVE_ALT) ? 1 : 0;
+
+        float accuracy = packet.param1;
+        if (accuracy <= 0) {
+            accuracy = 5.0f;
+        }
+
+        if (AP::ahrs().EKF3.forcePositionReset(loc, accuracy)) {
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF position reset: acc=%.1f", accuracy);
+            return MAV_RESULT_ACCEPTED;
+        }
+        return MAV_RESULT_FAILED;
+    }
+
+    case 43211: {
+        // Custom: Force EKF wind state from companion computer
+        // param1: windN (m/s), param2: windE (m/s), param3: accuracy (default 2.0)
+        float windN = packet.param1;
+        float windE = packet.param2;
+        float accuracy = packet.param3;
+        if (accuracy <= 0) {
+            accuracy = 2.0f;
+        }
+
+        if (AP::ahrs().EKF3.forceWindReset(windN, windE, accuracy)) {
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF wind set: N=%.1f E=%.1f", windN, windE);
+            return MAV_RESULT_ACCEPTED;
+        }
+        return MAV_RESULT_FAILED;
+    }
+
     default:
         return GCS_MAVLINK::handle_command_int_packet(packet);
     }

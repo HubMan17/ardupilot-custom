@@ -59,9 +59,15 @@ NavEKF3_core::MagCal NavEKF3_core::effective_magCal(void) const
 // avoid unnecessary operations
 void NavEKF3_core::setWindMagStateLearningMode()
 {
+    // When _has_forced_position is set (no GPS, position from MAVLink),
+    // wind must stay frozen and only be changed via forceWindReset().
+    // Without an absolute velocity reference (GPS), the Kalman filter
+    // cannot separate velocity from wind — they co-drift while keeping
+    // TAS = |vel - wind| constant, leading to runaway ground speed.
     const bool canEstimateWind = ((finalInflightYawInit && dragFusionEnabled) || assume_zero_sideslip()) &&
                                  !onGround &&
-                                 PV_AidingMode != AID_NONE;
+                                 PV_AidingMode != AID_NONE &&
+                                 !_has_forced_position;
     if (!inhibitWindStates && !canEstimateWind) {
         inhibitWindStates = true;
         updateStateIndexLim();
@@ -288,6 +294,13 @@ void NavEKF3_core::setAidingMode()
             break;
         }
         case AID_ABSOLUTE: {
+            // When we have a forced position (no GPS), keep refreshing the
+            // position pass time so the EKF health checks don't time out.
+            // This prevents spurious transitions back to AID_NONE.
+            if (_has_forced_position) {
+                lastPosPassTime_ms = imuSampleTime_ms;
+            }
+
             // Find the minimum time without data required to trigger any check
             uint16_t minTestTime_ms = MIN(frontend->tiltDriftTimeMax_ms, MIN(frontend->posRetryTimeNoVel_ms,frontend->posRetryTimeUseVel_ms));
 
@@ -351,7 +364,7 @@ void NavEKF3_core::setAidingMode()
                     (imuSampleTime_ms - lastPosPassTime_ms > maxLossTime_ms);
             }
 
-            if (attAidLossCritical) {
+            if (attAidLossCritical && !_has_forced_position) {
                 // if the loss of attitude data is critical, then put the filter into a constant position mode
                 PV_AidingMode = AID_NONE;
                 posTimeout = true;
@@ -359,7 +372,7 @@ void NavEKF3_core::setAidingMode()
                 tasTimeout = true;
                 dragTimeout = true;
                 gpsIsInUse = false;
-             } else if (posAidLossCritical) {
+             } else if (posAidLossCritical && !_has_forced_position) {
                 // if the loss of position is critical, declare all sources of position aiding as being timed out
                 posTimeout = true;
                 velTimeout = !optFlowUsed && !gpsVelUsed && !bodyOdmUsed;
@@ -723,10 +736,10 @@ void  NavEKF3_core::updateFilterStatus(void)
     status.flags.horiz_vel = someHorizRefData && filterHealthy;      // horizontal velocity estimate valid
     status.flags.vert_vel = someVertRefData && filterHealthy;        // vertical velocity estimate valid
     status.flags.horiz_pos_rel = ((doingFlowNav && gndOffsetValid) || doingWindRelNav || doingNormalGpsNav || doingBodyVelNav) && filterHealthy;   // relative horizontal position estimate valid
-    status.flags.horiz_pos_abs = doingNormalGpsNav && filterHealthy; // absolute horizontal position estimate valid
+    status.flags.horiz_pos_abs = (doingNormalGpsNav || _has_forced_position) && filterHealthy; // absolute horizontal position estimate valid
     status.flags.vert_pos = !hgtTimeout && filterHealthy && !hgtNotAccurate; // vertical position estimate valid
     status.flags.terrain_alt = gndOffsetValid && filterHealthy;		// terrain height estimate valid
-    status.flags.const_pos_mode = (PV_AidingMode == AID_NONE) && filterHealthy;     // constant position mode
+    status.flags.const_pos_mode = (PV_AidingMode == AID_NONE) && !_has_forced_position && filterHealthy;     // constant position mode
     status.flags.pred_horiz_pos_rel = status.flags.horiz_pos_rel; // EKF3 enters the required mode before flight
     status.flags.pred_horiz_pos_abs = status.flags.horiz_pos_abs; // EKF3 enters the required mode before flight
     status.flags.takeoff_detected = takeOffDetected; // takeoff for optical flow navigation has been detected

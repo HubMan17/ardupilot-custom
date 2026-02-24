@@ -1408,6 +1408,32 @@ bool NavEKF3::setOriginLLH(const Location &loc)
     return ret;
 }
 
+// Force-reset position of all EKF cores to the given location
+bool NavEKF3::forcePositionReset(const Location &loc, float posAccuracy)
+{
+    if (!core) {
+        return false;
+    }
+    bool ret = false;
+    for (uint8_t i=0; i<num_cores; i++) {
+        ret |= core[i].forcePositionReset(loc, posAccuracy);
+    }
+    return ret;
+}
+
+// Force-set wind state of all EKF cores
+bool NavEKF3::forceWindReset(float windN, float windE, float windAccuracy)
+{
+    if (!core) {
+        return false;
+    }
+    bool ret = false;
+    for (uint8_t i=0; i<num_cores; i++) {
+        ret |= core[i].forceWindReset(windN, windE, windAccuracy);
+    }
+    return ret;
+}
+
 // return estimated height above ground level
 // return false if ground height is not being estimated.
 bool NavEKF3::getHAGL(float &HAGL) const

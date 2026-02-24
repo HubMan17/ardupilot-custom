@@ -175,6 +175,91 @@ void NavEKF3_core::ResetPositionNE(ftype posN, ftype posE)
     lastPosReset_ms = imuSampleTime_ms;
 }
 
+// Force-reset position to an arbitrary Location from MAVLink.
+// If origin is not yet set, sets it first. Converts lat/lon to NE offsets,
+// resets position state, sets covariance and clears posTimeout.
+bool NavEKF3_core::forcePositionReset(const Location &loc, float posAccuracy)
+{
+    // If origin not valid, set it to the given location
+    if (!validOrigin) {
+        if (!setOrigin(loc)) {
+            return false;
+        }
+    }
+
+    // Convert lat/lon to NE offset from EKF origin
+    Vector2F posNE = EKF_origin.get_distance_NE_ftype(loc);
+
+    // Reset position state and output buffers
+    ResetPositionNE(posNE.x, posNE.y);
+
+    // Update lastKnownPositionNE so that AID_NONE constant-position
+    // fusion holds at the new location instead of the old one.
+    // Critical for cold start without GPS where lastKnownPositionNE
+    // is still (0,0) from initialization.
+    lastKnownPositionNE.x = posNE.x;
+    lastKnownPositionNE.y = posNE.y;
+
+    // Set position covariance to reflect accuracy
+    P[7][7] = sq(ftype(posAccuracy));
+    P[8][8] = sq(ftype(posAccuracy));
+
+    // Clear position timeout so EKF doesn't ignore the reset
+    posTimeout = false;
+    lastPosPassTime_ms = imuSampleTime_ms;
+
+    // Remember if this is the first forced position call.
+    // On repeat calls the velocity is already correct and must not be disturbed.
+    const bool firstForce = !_has_forced_position;
+
+    // Enable position reporting through AHRS even without GPS
+    _has_forced_position = true;
+
+    // Switch to AID_ABSOLUTE mode. This makes the EKF treat our forced
+    // position as real absolute aiding, enabling:
+    // - Wind state estimation (inhibitWindStates becomes false once v>5 m/s)
+    // - Proper TAS fusion naturally (not blocked by AID_NONE checks)
+    // - Correct health/status reporting (filterHealthy, horiz_pos_abs, etc.)
+    // - No zero-velocity fusion fighting against actual flight velocity
+    // Without GPS data, the filter dead-reckons using IMU + airspeed + sideslip.
+    PV_AidingMode = AID_ABSOLUTE;
+
+    // Clear all timeouts and refresh pass times so the EKF health checks
+    // don't immediately transition back to AID_NONE
+    posTimeout = false;
+    velTimeout = false;
+    tasTimeout = false;
+    lastPosPassTime_ms = imuSampleTime_ms;
+    lastVelPassTime_ms = imuSampleTime_ms;
+
+    // Only reset velocity covariance on the first call, when velocity is
+    // still zero and needs TAS fusion to build it up from scratch.
+    // On subsequent calls the aircraft is already flying with correct
+    // velocity — resetting covariance would destabilize the filter
+    // (velocity in NED frame is independent of position).
+    if (firstForce) {
+        zeroRows(P,4,5);
+        zeroCols(P,4,5);
+        P[4][4] = sq(ftype(25.0f));
+        P[5][5] = sq(ftype(25.0f));
+    }
+
+    return true;
+}
+
+// Force-set the EKF wind state from MAVLink.
+// windN/windE in m/s (NED frame), windAccuracy sets covariance.
+// In AID_NONE, inhibitWindStates is already true so the wind stays frozen.
+bool NavEKF3_core::forceWindReset(float windN, float windE, float windAccuracy)
+{
+    stateStruct.wind_vel.x = windN;
+    stateStruct.wind_vel.y = windE;
+    P[22][22] = sq(ftype(windAccuracy));
+    P[23][23] = sq(ftype(windAccuracy));
+    windStatesAligned = true;
+    return true;
+}
+
 // reset the stateStruct's D position
 //    posResetD is updated to hold the change in position
 //    storedOutput, outputDataNew and outputDataDelayed are updated with the change in position
@@ -558,26 +643,34 @@ void NavEKF3_core::SelectVelPosFusion()
     // vehicle. Do this to coincide with the height fusion.
     if (fuseHgtData && PV_AidingMode == AID_NONE) {
         if (assume_zero_sideslip() && tiltAlignComplete && motorsArmed) {
-            // handle special case where we are launching a FW aircraft without magnetometer
             fusePosData = false;
-            velPosObs[0] = 0.0f;
-            velPosObs[1] = 0.0f;
-            velPosObs[2] = stateStruct.velocity.z;
-            bool resetVelNE = !prevMotorsArmed;
-            // reset states to stop launch accel causing tilt error
-            if  (imuDataDelayed.delVel.x > 1.1f * GRAVITY_MSS * imuDataDelayed.delVelDT) {
-                lastLaunchAccelTime_ms = imuSampleTime_ms;
+            if (_has_forced_position) {
+                // After forcePositionReset: don't fuse zero velocity.
+                // Let IMU + airspeed + compass provide dead reckoning.
+                // Zero velocity conflicts with actual flight and causes
+                // erratic position estimates.
                 fuseVelData = false;
-                resetVelNE = true;
-            } else if (lastLaunchAccelTime_ms != 0 && (imuSampleTime_ms - lastLaunchAccelTime_ms) < 10000) {
-                fuseVelData = false;
-                resetVelNE = true;
             } else {
-                fuseVelData = true;
-            }
-            if (resetVelNE) {
-                stateStruct.velocity.x = 0.0f;
-                stateStruct.velocity.y = 0.0f;
+                // Standard AID_NONE: fuse zero velocity for tilt constraint
+                velPosObs[0] = 0.0f;
+                velPosObs[1] = 0.0f;
+                velPosObs[2] = stateStruct.velocity.z;
+                bool resetVelNE = !prevMotorsArmed;
+                // reset states to stop launch accel causing tilt error
+                if  (imuDataDelayed.delVel.x > 1.1f * GRAVITY_MSS * imuDataDelayed.delVelDT) {
+                    lastLaunchAccelTime_ms = imuSampleTime_ms;
+                    fuseVelData = false;
+                    resetVelNE = true;
+                } else if (lastLaunchAccelTime_ms != 0 && (imuSampleTime_ms - lastLaunchAccelTime_ms) < 10000) {
+                    fuseVelData = false;
+                    resetVelNE = true;
+                } else {
+                    fuseVelData = true;
+                }
+                if (resetVelNE) {
+                    stateStruct.velocity.x = 0.0f;
+                    stateStruct.velocity.y = 0.0f;
+                }
             }
         } else {
             fusePosData = true;

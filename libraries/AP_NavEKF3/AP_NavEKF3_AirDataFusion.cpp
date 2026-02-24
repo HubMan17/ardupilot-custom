@@ -144,7 +144,9 @@ void NavEKF3_core::FuseAirspeed()
         }
 
         // test the ratio before fusing data, forcing fusion if airspeed and position are timed out as we have no choice but to try and use airspeed to constrain error growth
-        if (tasDataDelayed.allowFusion && (isConsistent || (tasTimeout && posTimeout))) {
+        // With forced position (no GPS), airspeed is the ONLY velocity magnitude
+        // constraint — always fuse it regardless of innovation gate.
+        if (tasDataDelayed.allowFusion && (isConsistent || (tasTimeout && posTimeout) || _has_forced_position)) {
 
             // restart the counter
             lastTasPassTime_ms = imuSampleTime_ms;
@@ -212,7 +214,10 @@ void NavEKF3_core::SelectTasFusion()
     readAirSpdData();
 
     // if the filter is initialised, wind states are not inhibited and we have data to fuse, then perform TAS fusion
-    if (tasDataToFuse && statesInitialised && !inhibitWindStates) {
+    // Also allow TAS fusion when position was force-set (AID_NONE with _has_forced_position):
+    // wind states stay frozen (Kfusion zeroed by inhibitWindStates), but velocity states
+    // are updated by airspeed innovation, giving the EKF a velocity magnitude constraint.
+    if (tasDataToFuse && statesInitialised && (!inhibitWindStates || _has_forced_position)) {
         FuseAirspeed();
         prevTasStep_ms = imuSampleTime_ms;
     }
@@ -241,10 +246,15 @@ void NavEKF3_core::SelectBetaDragFusion()
     // use of air data to constrain drift is necessary if we have limited sensor data or are doing inertial dead reckoning
     bool is_dead_reckoning = ((imuSampleTime_ms - lastPosPassTime_ms) > frontend->deadReckonDeclare_ms) && ((imuSampleTime_ms - lastVelPassTime_ms) > frontend->deadReckonDeclare_ms);
     const bool noYawSensor = !use_compass() && !using_noncompass_for_yaw();
-    const bool f_required = (noYawSensor && (frontend->_betaMask & (1<<1))) || is_dead_reckoning;
+    // With forced position (no GPS), airspeed+sideslip are the ONLY velocity
+    // constraints. Mark as required so airDataFusionWindOnly=false and all
+    // states (including velocity) get corrected, not just wind.
+    const bool f_required = (noYawSensor && (frontend->_betaMask & (1<<1))) || is_dead_reckoning || _has_forced_position;
 
     // set true when sideslip fusion is feasible (requires zero sideslip assumption to be valid and use of wind states)
-    const bool f_beta_feasible = (assume_zero_sideslip() && !inhibitWindStates);
+    // Also allow when forced position is active — wind states stay frozen
+    // (Kalman gain zeroed), but velocity direction MUST be constrained.
+    const bool f_beta_feasible = (assume_zero_sideslip() && (!inhibitWindStates || _has_forced_position));
 
     // use synthetic sideslip fusion if feasible, required and enough time has lapsed since the last fusion
     if (f_beta_feasible && f_timeTrigger) {

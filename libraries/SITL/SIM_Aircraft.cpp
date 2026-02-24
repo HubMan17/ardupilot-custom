@@ -611,6 +611,25 @@ void Aircraft::update_model(const struct sitl_input &input)
  */
 void Aircraft::update_dynamics(const Vector3f &rot_accel)
 {
+    // update eas2tas and air density using ISA atmosphere model
+    {
+        const float alt_amsl = location.alt * 0.01f;
+        const float T0 = 288.15f; // sea level temperature, K
+        float tempK = T0 - ISA_LAPSE_RATE * alt_amsl;
+        if (tempK < 100.0f) {
+            tempK = 100.0f; // clamp for very high altitudes
+        }
+        // ISA density: rho = rho0 * (T/T0)^(g/(L*R) - 1)
+        // g/(L*R) = 9.80665/(0.0065*287.26) = 5.2533, so exponent = 4.2533
+        const float temp_ratio = tempK / T0;
+        air_density = SSL_AIR_DENSITY * powf(temp_ratio, 4.2533f);
+        if (air_density > 0.0f) {
+            eas2tas = sqrtf(SSL_AIR_DENSITY / air_density);
+        } else {
+            eas2tas = 1.0f;
+        }
+    }
+
     const float delta_time = frame_time_us * 1.0e-6f;
 
     // update rotational rates in body frame
@@ -619,6 +638,12 @@ void Aircraft::update_dynamics(const Vector3f &rot_accel)
     gyro.x = constrain_float(gyro.x, -radians(2000.0f), radians(2000.0f));
     gyro.y = constrain_float(gyro.y, -radians(2000.0f), radians(2000.0f));
     gyro.z = constrain_float(gyro.z, -radians(2000.0f), radians(2000.0f));
+
+    // limit body accel to 64G to prevent numerical instabilities
+    const float accel_limit = 64 * GRAVITY_MSS;
+    accel_body.x = constrain_float(accel_body.x, -accel_limit, accel_limit);
+    accel_body.y = constrain_float(accel_body.y, -accel_limit, accel_limit);
+    accel_body.z = constrain_float(accel_body.z, -accel_limit, accel_limit);
 
     // update attitude
     dcm.rotate(gyro * delta_time);
@@ -650,11 +675,8 @@ void Aircraft::update_dynamics(const Vector3f &rot_accel)
     // velocity relative to airmass in body frame
     velocity_air_bf = dcm.transposed() * velocity_air_ef;
 
-    // airspeed
-    airspeed = velocity_air_ef.length();
-
-    // airspeed as seen by a fwd pitot tube (limited to 120m/s)
-    airspeed_pitot = constrain_float(velocity_air_bf * Vector3f(1.0f, 0.0f, 0.0f), 0.0f, 120.0f);
+    // airspeed (EAS) and pitot with AoA modeling
+    update_eas_airspeed();
 
     // constrain height to the ground
     if (on_ground()) {
@@ -946,6 +968,24 @@ void Aircraft::extrapolate_sensors(float delta_time)
     position += (velocity_ef * delta_time).todouble();
     velocity_air_ef = velocity_ef - wind_ef;
     velocity_air_bf = dcm.transposed() * velocity_air_ef;
+}
+
+/*
+  update airspeed and pitot speed.
+  airspeed is TAS for use in aerodynamic force calculations
+  (SIM_Plane uses qbar = 0.5 * rho * airspeed^2 with dynamic air_density).
+  airspeed_pitot uses the original 4.4.3 formula (forward body-frame
+  component, clamped to 120 m/s) for full compatibility with the
+  4.4.3 flight controller tuning.
+ */
+void Aircraft::update_eas_airspeed()
+{
+    // TAS for aerodynamic calculations
+    airspeed = velocity_air_ef.length();
+
+    // airspeed as seen by a fwd pitot tube (original 4.4.3 formula)
+    // uses forward component of body-frame air velocity, clamped to [0, 120]
+    airspeed_pitot = constrain_float(velocity_air_bf * Vector3f(1.0f, 0.0f, 0.0f), 0.0f, 120.0f);
 }
 
 void Aircraft::update_external_payload(const struct sitl_input &input)

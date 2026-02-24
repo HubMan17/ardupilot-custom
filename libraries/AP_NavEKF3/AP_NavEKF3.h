@@ -152,6 +152,14 @@ public:
     // Returns false if the filter has rejected the attempt to set the origin
     bool setOriginLLH(const Location &loc);
 
+    // Force-reset the position of all EKF cores to the given location.
+    // Sets origin if not yet valid. posAccuracy sets the initial covariance.
+    bool forcePositionReset(const Location &loc, float posAccuracy);
+
+    // Force-set wind state of all EKF cores.
+    // windN/windE in m/s (NED frame), windAccuracy sets covariance.
+    bool forceWindReset(float windN, float windE, float windAccuracy);
+
     // return estimated height above ground level
     // return false if ground height is not being estimated.
     bool getHAGL(float &HAGL) const;

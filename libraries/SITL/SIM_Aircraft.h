@@ -172,8 +172,10 @@ protected:
     float mass;                          // kg
     float external_payload_mass;         // kg
     Vector3f accel_body{0.0f, 0.0f, -GRAVITY_MSS}; // m/s/s NED, body frame
-    float airspeed;                      // m/s, apparent airspeed
-    float airspeed_pitot;                // m/s, apparent airspeed, as seen by fwd pitot tube
+    float airspeed;                      // m/s, EAS airspeed
+    float airspeed_pitot;                // m/s, EAS airspeed, as seen by fwd pitot tube
+    float eas2tas = 1.0f;               // EAS to TAS conversion factor (dynamic, ISA model)
+    float air_density = SSL_AIR_DENSITY; // kg/m^3, dynamic based on altitude (ISA model)
     float battery_voltage = -1.0f;
     float battery_current;
     float local_ground_level;            // ground level at local position
@@ -289,6 +291,9 @@ protected:
     float filtered_idx(float v, uint8_t idx);
     float filtered_servo_angle(const struct sitl_input &input, uint8_t idx);
     float filtered_servo_range(const struct sitl_input &input, uint8_t idx);
+
+    // update EAS airspeed and pitot speed with AoA modeling
+    void update_eas_airspeed();
 
     // extrapolate sensors by a given delta time in seconds
     void extrapolate_sensors(float delta_time);

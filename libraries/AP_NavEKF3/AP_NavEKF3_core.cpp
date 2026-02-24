@@ -240,6 +240,7 @@ void NavEKF3_core::InitialiseVariables()
     velDotNEDfilt.zero();
     lastKnownPositionNE.zero();
     lastKnownPositionD = 0;
+    _has_forced_position = false;
     prevTnb.zero();
     memset(&P[0][0], 0, sizeof(P));
     memset(&KH[0][0], 0, sizeof(KH));
@@ -494,14 +495,9 @@ bool NavEKF3_core::InitialiseFilterBootstrap(void)
     // update sensor selection (for affinity)
     update_sensor_selection();
 
-    // If we are a plane and don't have GPS lock then don't initialise
-    if (assume_zero_sideslip() && dal.gps().status(preferred_gps) < AP_DAL_GPS::GPS_OK_FIX_3D) {
-        dal.snprintf(prearm_fail_string,
-                     sizeof(prearm_fail_string),
-                     "EKF3 init failure: No GPS lock");
-        statesInitialised = false;
-        return false;
-    }
+    // GPS check removed for planes — allows cold start without GPS.
+    // EKF initialises in AID_NONE; position can be set later via
+    // forcePositionReset (MAVLink command 43210).
 
     // read all the sensors required to start the EKF the states
     readIMUData();
