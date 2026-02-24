@@ -1250,8 +1250,12 @@ const AP_Param::GroupInfo ParametersG2::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("AUTOTUNE_AXES", 34, ParametersG2, axis_bitmask, 7),
 
+#if HAL_QUADPLANE_ENABLED
+    // @Group: A_LAND_
+    // @Path: quadplane.cpp
+    AP_SUBGROUPINFO(auto_help_land, "A_LAND_", 35, ParametersG2, AP_AutoHelpLand),
+#endif
 
-    
     AP_GROUPEND
 };
 

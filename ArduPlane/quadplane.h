@@ -28,6 +28,24 @@
 #include "transition.h"
 
 /*
+  Parameter class for custom auto-help landing descent limiting.
+  Provides separate GPS and no-GPS rate tables plus no-GPS tuning params.
+  Registered as A_LAND_* in ParametersG2.
+ */
+class AP_AutoHelpLand {
+public:
+    AP_AutoHelpLand() { AP_Param::setup_object_defaults(this, var_info); }
+    static const struct AP_Param::GroupInfo var_info[];
+
+    // GPS rate table
+    AP_Float g_rt_3, g_rt_5, g_rt_7, g_rt_10, g_rt_20;
+    // No-GPS rate table
+    AP_Float n_rt_3, n_rt_5, n_rt_7, n_rt_10, n_rt_20;
+    // No-GPS tuning
+    AP_Float n_kp, n_ki, n_ff, n_stl, n_galt;
+};
+
+/*
   QuadPlane specific functionality
  */
 class QuadPlane
@@ -283,8 +301,11 @@ private:
     void Log_Write_QControl_Tuning();
     void log_QPOS(void);
     float landing_descent_rate_cms(float height_above_ground);
-    float get_qstab_max_descent_rate_cms(float alt_m) const;
-    float compute_qstab_nogps_descent_throttle(void);
+
+    // Auto-help landing: descent limiting for QLoiter
+    void hold_auto_help_land(float throttle_in);
+    float get_ahl_descent_rate_cms(float alt_m, bool gps) const;
+    float compute_ahl_nogps_throttle(void);
 
     // setup correct aux channels for frame class
     void setup_default_channels(uint8_t num_motors);
@@ -598,20 +619,8 @@ private:
     // AHRS alt for land abort and package place, meters
     float land_descend_start_alt;
 
-    float _qstab_nogps_i_sum = 0.0f;   // PI integral for no-GPS descent limiting
-    float _qstab_nogps_last_thr = 0.0f; // EMA-filtered descent rate (m/s)
-
-    // QStabilize descent-limit parameters (tunable via Q_SDL_*)
-    AP_Float sdl_rt_3;      // max descent rate below 3m, cm/s
-    AP_Float sdl_rt_5;      // max descent rate at 5m, cm/s
-    AP_Float sdl_rt_7;      // max descent rate at 7m, cm/s
-    AP_Float sdl_rt_10;     // max descent rate at 10m, cm/s
-    AP_Float sdl_rt_20;     // max descent rate at 20m+, cm/s
-    AP_Float sdl_kp;        // P gain for no-GPS descent controller
-    AP_Float sdl_ki;        // I gain for no-GPS descent controller
-    AP_Float sdl_gnd_alt;   // altitude for ground ramp (base→0), meters
-    AP_Float sdl_base_lo;   // base throttle fraction at ground (hover * this)
-    AP_Float sdl_base_hi;   // extra base fraction at 20m+ (hover * (lo + hi))
+    float _ahl_nogps_i_sum = 0.0f;      // settle accumulator for no-GPS descent limiting
+    float _ahl_nogps_ema_descent = 0.0f; // EMA-filtered descent rate (m/s)
 
     // min alt for navigation in takeoff
     AP_Float takeoff_navalt_min;

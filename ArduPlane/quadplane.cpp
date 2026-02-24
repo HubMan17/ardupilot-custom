@@ -504,91 +504,146 @@ const AP_Param::GroupInfo QuadPlane::var_info2[] = {
     // @User: Standard
     AP_GROUPINFO("RTL_ALT_MIN", 34, QuadPlane, qrtl_alt_min, 10),
 
-    // @Param: SDL_RT_3
-    // @DisplayName: Descent limit rate below 3m
-    // @Description: Maximum descent rate in QStabilize descent limiting below 3 meters altitude
+    // 35-44: formerly Q_SDL_* parameters, now moved to A_LAND_* group
+
+    AP_GROUPEND
+};
+
+// AP_AutoHelpLand parameter table — registered as A_LAND_* in ParametersG2
+const AP_Param::GroupInfo AP_AutoHelpLand::var_info[] = {
+    // GPS rate table
+    // @Param: G_RT3
+    // @DisplayName: GPS descent rate below 3m
+    // @Description: Maximum descent rate with GPS below 3 meters altitude
     // @Units: cm/s
     // @Range: 5 100
     // @Increment: 1
     // @User: Standard
-    AP_GROUPINFO("SDL_RT_3", 35, QuadPlane, sdl_rt_3, 10),
+    AP_GROUPINFO("G_RT3", 1, AP_AutoHelpLand, g_rt_3, 10),
 
-    // @Param: SDL_RT_5
-    // @DisplayName: Descent limit rate at 5m
-    // @Description: Maximum descent rate in QStabilize descent limiting at 5 meters altitude
+    // @Param: G_RT5
+    // @DisplayName: GPS descent rate at 5m
+    // @Description: Maximum descent rate with GPS at 5 meters altitude
     // @Units: cm/s
     // @Range: 5 200
     // @Increment: 1
     // @User: Standard
-    AP_GROUPINFO("SDL_RT_5", 36, QuadPlane, sdl_rt_5, 15),
+    AP_GROUPINFO("G_RT5", 2, AP_AutoHelpLand, g_rt_5, 15),
 
-    // @Param: SDL_RT_7
-    // @DisplayName: Descent limit rate at 7m
-    // @Description: Maximum descent rate in QStabilize descent limiting at 7 meters altitude
+    // @Param: G_RT7
+    // @DisplayName: GPS descent rate at 7m
+    // @Description: Maximum descent rate with GPS at 7 meters altitude
     // @Units: cm/s
     // @Range: 5 300
     // @Increment: 1
     // @User: Standard
-    AP_GROUPINFO("SDL_RT_7", 37, QuadPlane, sdl_rt_7, 25),
+    AP_GROUPINFO("G_RT7", 3, AP_AutoHelpLand, g_rt_7, 25),
 
-    // @Param: SDL_RT_10
-    // @DisplayName: Descent limit rate at 10m
-    // @Description: Maximum descent rate in QStabilize descent limiting at 10 meters altitude
+    // @Param: G_RT10
+    // @DisplayName: GPS descent rate at 10m
+    // @Description: Maximum descent rate with GPS at 10 meters altitude
     // @Units: cm/s
     // @Range: 10 400
     // @Increment: 1
     // @User: Standard
-    AP_GROUPINFO("SDL_RT_10", 38, QuadPlane, sdl_rt_10, 30),
+    AP_GROUPINFO("G_RT10", 4, AP_AutoHelpLand, g_rt_10, 30),
 
-    // @Param: SDL_RT_20
-    // @DisplayName: Descent limit rate at 20m+
-    // @Description: Maximum descent rate in QStabilize descent limiting at 20 meters and above
+    // @Param: G_RT20
+    // @DisplayName: GPS descent rate at 20m+
+    // @Description: Maximum descent rate with GPS at 20 meters and above
     // @Units: cm/s
     // @Range: 50 500
     // @Increment: 5
     // @User: Standard
-    AP_GROUPINFO("SDL_RT_20", 39, QuadPlane, sdl_rt_20, 150),
+    AP_GROUPINFO("G_RT20", 5, AP_AutoHelpLand, g_rt_20, 150),
 
-    // @Param: SDL_KP
-    // @DisplayName: Descent limit P gain
-    // @Description: Proportional gain for no-GPS descent rate controller in QStabilize. Higher values give faster response but may cause oscillation
+    // No-GPS rate table
+    // @Param: N_RT3
+    // @DisplayName: No-GPS descent rate below 3m
+    // @Description: Maximum descent rate without GPS below 3 meters altitude
+    // @Units: cm/s
+    // @Range: 5 100
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("N_RT3", 6, AP_AutoHelpLand, n_rt_3, 10),
+
+    // @Param: N_RT5
+    // @DisplayName: No-GPS descent rate at 5m
+    // @Description: Maximum descent rate without GPS at 5 meters altitude
+    // @Units: cm/s
+    // @Range: 5 200
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("N_RT5", 7, AP_AutoHelpLand, n_rt_5, 15),
+
+    // @Param: N_RT7
+    // @DisplayName: No-GPS descent rate at 7m
+    // @Description: Maximum descent rate without GPS at 7 meters altitude
+    // @Units: cm/s
+    // @Range: 5 300
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("N_RT7", 8, AP_AutoHelpLand, n_rt_7, 25),
+
+    // @Param: N_RT10
+    // @DisplayName: No-GPS descent rate at 10m
+    // @Description: Maximum descent rate without GPS at 10 meters altitude
+    // @Units: cm/s
+    // @Range: 10 400
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("N_RT10", 9, AP_AutoHelpLand, n_rt_10, 30),
+
+    // @Param: N_RT20
+    // @DisplayName: No-GPS descent rate at 20m+
+    // @Description: Maximum descent rate without GPS at 20 meters and above
+    // @Units: cm/s
+    // @Range: 50 500
+    // @Increment: 5
+    // @User: Standard
+    AP_GROUPINFO("N_RT20", 10, AP_AutoHelpLand, n_rt_20, 150),
+
+    // No-GPS tuning
+    // @Param: N_KP
+    // @DisplayName: No-GPS P gain
+    // @Description: Proportional gain for no-GPS descent rate controller. Higher values give faster response but may cause oscillation
     // @Range: 0.01 0.30
     // @Increment: 0.01
     // @User: Advanced
-    AP_GROUPINFO("SDL_KP", 40, QuadPlane, sdl_kp, 0.05),
+    AP_GROUPINFO("N_KP", 11, AP_AutoHelpLand, n_kp, 0.05),
 
-    // @Param: SDL_KI
-    // @DisplayName: Descent limit I gain
-    // @Description: Integral gain for no-GPS descent rate controller in QStabilize. Higher values find steady-state faster but may overshoot
+    // @Param: N_KI
+    // @DisplayName: No-GPS I gain (reserved)
+    // @Description: Integral gain for no-GPS descent controller. Reserved for future use
     // @Range: 0.005 0.10
     // @Increment: 0.005
     // @User: Advanced
-    AP_GROUPINFO("SDL_KI", 41, QuadPlane, sdl_ki, 0.02),
+    AP_GROUPINFO("N_KI", 12, AP_AutoHelpLand, n_ki, 0.02),
 
-    // @Param: SDL_GND_ALT
-    // @DisplayName: Descent limit ground settle altitude
-    // @Description: Ground settling is only active below this barometric altitude. Above it, pure feed-forward + P control. Higher values = settle starts earlier during descent. Set very high (e.g. 50) to always settle.
+    // @Param: N_FF
+    // @DisplayName: No-GPS feed-forward gain
+    // @Description: Feed-forward gain for no-GPS descent controller. Throttle = hover - FF * target_rate + KP * error. Higher = more throttle reduction per m/s of target descent rate
+    // @Range: 0.01 0.20
+    // @Increment: 0.01
+    // @User: Standard
+    AP_GROUPINFO("N_FF", 13, AP_AutoHelpLand, n_ff, 0.05),
+
+    // @Param: N_STL
+    // @DisplayName: No-GPS ground settle rate
+    // @Description: Throttle reduction rate when aircraft is barely descending near ground. Higher = faster settling but more aggressive throttle cut. Set 0 to disable
+    // @Range: 0 0.10
+    // @Increment: 0.005
+    // @User: Standard
+    AP_GROUPINFO("N_STL", 14, AP_AutoHelpLand, n_stl, 0.03),
+
+    // @Param: N_GALT
+    // @DisplayName: No-GPS ground settle altitude
+    // @Description: Ground settling is only active below this barometric altitude. Above it, pure feed-forward + P control
     // @Units: m
     // @Range: 1 20
     // @Increment: 0.5
     // @User: Standard
-    AP_GROUPINFO("SDL_GND_ALT", 42, QuadPlane, sdl_gnd_alt, 3.0),
-
-    // @Param: SDL_BASE_LO
-    // @DisplayName: Descent limit feed-forward gain
-    // @Description: Feed-forward gain for no-GPS descent controller. Throttle = hover - FF * target_rate + KP * error. Higher = more throttle reduction per m/s of target descent rate. With FF=0.05 and target 0.30 m/s: throttle offset = 1.5% below hover.
-    // @Range: 0.01 0.20
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("SDL_BASE_LO", 43, QuadPlane, sdl_base_lo, 0.05),
-
-    // @Param: SDL_BASE_HI
-    // @DisplayName: Descent limit ground settle rate
-    // @Description: Throttle reduction rate when aircraft is barely descending (on ground or hovering). Higher = faster settling on ground but more aggressive throttle cut. Set 0 to disable. Throttle reduces by this value for each second of near-zero descent.
-    // @Range: 0 0.10
-    // @Increment: 0.005
-    // @User: Standard
-    AP_GROUPINFO("SDL_BASE_HI", 44, QuadPlane, sdl_base_hi, 0.03),
+    AP_GROUPINFO("N_GALT", 15, AP_AutoHelpLand, n_galt, 3.0),
 
     AP_GROUPEND
 };
@@ -1051,12 +1106,37 @@ void QuadPlane::hold_stabilize(float throttle_in)
     // call attitude controller
     multicopter_attitude_rate_update(get_desired_yaw_rate_cds(false));
 
+    if ((throttle_in <= 0) && !air_mode_active()) {
+        set_desired_spool_state(AP_Motors::DesiredSpoolState::GROUND_IDLE);
+        attitude_control->set_throttle_out(0, true, 0);
+        relax_attitude_control();
+    } else {
+        set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
+        bool should_boost = true;
+        if (tailsitter.enabled() && assisted_flight) {
+            should_boost = false;
+        }
+        attitude_control->set_throttle_out(throttle_in, should_boost, 0);
+    }
+}
+
+/*
+  Auto-help landing: descent limiting for QLoiter mode.
+  Same logic as the old custom hold_stabilize() but references A_LAND_* params.
+  GPS branch uses Z position controller with GPS rate table.
+  No-GPS branch uses FF+P baro-only controller with no-GPS rate table.
+ */
+void QuadPlane::hold_auto_help_land(float throttle_in)
+{
+    // call attitude controller
+    multicopter_attitude_rate_update(get_desired_yaw_rate_cds(false));
+
     // descent limiting: arm after climbing above 5 m
     static bool descent_limit_armed = false;
     if (!motors->armed()) {
         descent_limit_armed = false;
-        _qstab_nogps_i_sum = 0.0f;
-        _qstab_nogps_last_thr = 0.0f;
+        _ahl_nogps_i_sum = 0.0f;
+        _ahl_nogps_ema_descent = 0.0f;
     }
     if (!descent_limit_armed && plane.barometer.get_altitude() > 5.0f) {
         descent_limit_armed = true;
@@ -1066,14 +1146,14 @@ void QuadPlane::hold_stabilize(float throttle_in)
     const float descent_limit_throttle_threshold = 0.40f;
 
     if (have_gps) {
-        _qstab_nogps_i_sum = 0.0f;
-        _qstab_nogps_last_thr = 0.0f;
+        _ahl_nogps_i_sum = 0.0f;
+        _ahl_nogps_ema_descent = 0.0f;
     }
 
     if (have_gps && throttle_in <= descent_limit_throttle_threshold && descent_limit_armed) {
         // GPS available: controlled descent using Z position controller
         const float alt_m = plane.barometer.get_altitude();
-        const float max_descent_cms = get_qstab_max_descent_rate_cms(alt_m);
+        const float max_descent_cms = get_ahl_descent_rate_cms(alt_m, true);
 
         set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
         pos_control->set_max_speed_accel_z(-max_descent_cms, pilot_velocity_z_max_up, pilot_accel_z);
@@ -1083,7 +1163,7 @@ void QuadPlane::hold_stabilize(float throttle_in)
 
     } else if (!have_gps && throttle_in <= descent_limit_throttle_threshold && descent_limit_armed) {
         // No-GPS descent limiting: smoothed throttle floor, always >= 0
-        const float floor_thr = compute_qstab_nogps_descent_throttle();
+        const float floor_thr = compute_ahl_nogps_throttle();
         const float final_thr = MAX(throttle_in, floor_thr);
         set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
         bool should_boost = true;
@@ -1093,7 +1173,6 @@ void QuadPlane::hold_stabilize(float throttle_in)
         attitude_control->set_throttle_out(final_thr, should_boost, 0);
 
     } else if ((throttle_in <= 0) && !air_mode_active()) {
-        // stock QSTABILIZE: idle
         set_desired_spool_state(AP_Motors::DesiredSpoolState::GROUND_IDLE);
         attitude_control->set_throttle_out(0, true, 0);
         relax_attitude_control();
@@ -1388,14 +1467,20 @@ float QuadPlane::landing_descent_rate_cms(float height_above_ground)
   return maximum descent rate in cm/s for QSTABILIZE descent limiting,
   based on barometric altitude. Uses linear interpolation between zones.
  */
-float QuadPlane::get_qstab_max_descent_rate_cms(float alt_m) const
+/*
+  Get altitude-dependent descent rate limit from A_LAND_* rate table.
+  Selects GPS (G_RT*) or no-GPS (N_RT*) table based on gps flag.
+  Returns rate in cm/s.
+ */
+float QuadPlane::get_ahl_descent_rate_cms(float alt_m, bool gps) const
 {
-    // rates at breakpoints — tunable via Q_SDL_RT_* parameters
-    const float r3  = sdl_rt_3.get();     // below 3m  (default 10 cm/s)
-    const float r5  = sdl_rt_5.get();     // at 5m     (default 15 cm/s)
-    const float r7  = sdl_rt_7.get();     // at 7m     (default 25 cm/s)
-    const float r10 = sdl_rt_10.get();    // at 10m    (default 30 cm/s)
-    const float r20 = sdl_rt_20.get();    // at 20m+   (default 150 cm/s)
+    const AP_AutoHelpLand &p = plane.g2.auto_help_land;
+
+    const float r3  = gps ? p.g_rt_3.get()  : p.n_rt_3.get();
+    const float r5  = gps ? p.g_rt_5.get()  : p.n_rt_5.get();
+    const float r7  = gps ? p.g_rt_7.get()  : p.n_rt_7.get();
+    const float r10 = gps ? p.g_rt_10.get() : p.n_rt_10.get();
+    const float r20 = gps ? p.g_rt_20.get() : p.n_rt_20.get();
 
     if (alt_m < 3.0f)  return r3;
     if (alt_m < 5.0f)  return linear_interpolate(r3, r5, alt_m, 3.0f, 5.0f);
@@ -1406,15 +1491,16 @@ float QuadPlane::get_qstab_max_descent_rate_cms(float alt_m) const
 }
 
 /*
-  Descent rate controller for no-GPS QSTABILIZE.
+  Descent rate controller for no-GPS auto-help landing.
   Feed-forward + P design (no integral = no windup):
     throttle = hover - FF * target_rate + KP * error
   FF provides steady-state offset: higher target rate = lower throttle.
   KP corrects for deviations from target rate.
   Active until disarm (no altitude cutoff — baro can drift negative).
  */
-float QuadPlane::compute_qstab_nogps_descent_throttle(void)
+float QuadPlane::compute_ahl_nogps_throttle(void)
 {
+    const AP_AutoHelpLand &p = plane.g2.auto_help_land;
     const float dt = plane.scheduler.get_loop_period_s();
     const float alt_m = plane.barometer.get_altitude();
     const float climb_rate_ms = plane.barometer.get_climb_rate();        // m/s, + up
@@ -1423,40 +1509,40 @@ float QuadPlane::compute_qstab_nogps_descent_throttle(void)
     // EMA filter on descent rate to suppress baro noise spikes near ground.
     // tau ~0.2s: smooths out 1-2 tick spikes while responding within ~0.3s.
     const float alpha = constrain_float(5.0f * dt, 0.0f, 1.0f);
-    _qstab_nogps_last_thr = _qstab_nogps_last_thr * (1.0f - alpha) + raw_descent_ms * alpha;
-    const float descent_rate_ms = _qstab_nogps_last_thr;
+    _ahl_nogps_ema_descent = _ahl_nogps_ema_descent * (1.0f - alpha) + raw_descent_ms * alpha;
+    const float descent_rate_ms = _ahl_nogps_ema_descent;
 
-    const float target_rate_ms = get_qstab_max_descent_rate_cms(alt_m) * 0.01f;
+    const float target_rate_ms = get_ahl_descent_rate_cms(alt_m, false) * 0.01f;
     const float hover_thr = motors->get_throttle_hover();
 
     // error > 0: descending too fast (need more throttle)
     // error < 0: descending too slow or ascending (can reduce throttle)
     const float error = descent_rate_ms - target_rate_ms;
 
-    const float kP = sdl_kp.get();              // P gain
-    const float ff = sdl_base_lo.get();          // feed-forward gain
+    const float kP = p.n_kp.get();
+    const float ff = p.n_ff.get();
 
     // Feed-forward: reduce throttle below hover proportional to target rate
     // P correction: adds/removes throttle based on rate error
     float throttle = hover_thr - ff * target_rate_ms + kP * error;
 
-    // Ground settling: only active below Q_SDL_GND_ALT (default 3m).
+    // Ground settling: only active below N_GALT.
     // When barely descending near ground, slowly reduce throttle so
     // aircraft settles. Fast recovery when descent resumes.
-    const float settle_rate = sdl_base_hi.get();       // Q_SDL_BASE_HI: settle rate
-    const float settle_alt = sdl_gnd_alt.get();        // Q_SDL_GND_ALT: max alt for settle
+    const float settle_rate = p.n_stl.get();
+    const float settle_alt = p.n_galt.get();
     if (settle_rate > 0.001f && alt_m < settle_alt) {
         if (descent_rate_ms < 0.05f) {
             // barely moving vertically — accumulate (slow: 5s to max)
-            _qstab_nogps_i_sum = MIN(_qstab_nogps_i_sum + dt, 5.0f);
+            _ahl_nogps_i_sum = MIN(_ahl_nogps_i_sum + dt, 5.0f);
         } else {
             // descending normally — decay fast (1s from max to 0)
-            _qstab_nogps_i_sum = MAX(_qstab_nogps_i_sum - 5.0f * dt, 0.0f);
+            _ahl_nogps_i_sum = MAX(_ahl_nogps_i_sum - 5.0f * dt, 0.0f);
         }
-        throttle -= _qstab_nogps_i_sum * settle_rate;
+        throttle -= _ahl_nogps_i_sum * settle_rate;
     } else {
         // above settle altitude — reset accumulator
-        _qstab_nogps_i_sum = MAX(_qstab_nogps_i_sum - 5.0f * dt, 0.0f);
+        _ahl_nogps_i_sum = MAX(_ahl_nogps_i_sum - 5.0f * dt, 0.0f);
     }
 
     throttle = constrain_float(throttle, 0.0f, hover_thr + 0.25f);

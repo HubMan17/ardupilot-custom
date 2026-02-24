@@ -568,6 +568,11 @@ public:
     
     AP_Int8         axis_bitmask; // axes to be autotuned
 
+#if HAL_QUADPLANE_ENABLED
+    // custom auto-help landing descent limiting (A_LAND_* params)
+    AP_AutoHelpLand auto_help_land;
+#endif
+
     // just to make compilation easier when all things are compiled out...
     uint8_t unused_integer;
 };
