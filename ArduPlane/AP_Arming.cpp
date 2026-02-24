@@ -325,6 +325,11 @@ bool AP_Arming_Plane::disarm(const AP_Arming::Method method, bool do_disarm_chec
         }
     }
 
+    if (do_disarm_checks &&
+        plane.g2.disarm_protect.should_block_disarm((uint8_t)method, plane.relative_altitude)) {
+        return false;
+    }
+
     if (!AP_Arming::disarm(method, do_disarm_checks)) {
         return false;
     }
@@ -359,6 +364,8 @@ bool AP_Arming_Plane::disarm(const AP_Arming::Method method, bool do_disarm_chec
     // DO_CHANGE_SPEED commands
     plane.new_airspeed_cm = -1;
     
+    plane.g2.disarm_protect.reset();
+
     gcs().send_text(MAV_SEVERITY_INFO, "Throttle disarmed");
 
     return true;

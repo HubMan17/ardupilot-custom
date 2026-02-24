@@ -4,6 +4,7 @@
 
 #include <AP_Common/AP_Common.h>
 #include <AP_Gripper/AP_Gripper.h>
+#include "AP_DisarmProtect.h"
 
 // Global parameter class.
 //
@@ -572,6 +573,9 @@ public:
     // custom auto-help landing descent limiting (A_LAND_* params)
     AP_AutoHelpLand auto_help_land;
 #endif
+
+    // disarm protection at altitude
+    AP_DisarmProtect disarm_protect;
 
     // just to make compilation easier when all things are compiled out...
     uint8_t unused_integer;

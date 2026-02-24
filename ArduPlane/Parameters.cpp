@@ -1256,6 +1256,10 @@ const AP_Param::GroupInfo ParametersG2::var_info[] = {
     AP_SUBGROUPINFO(auto_help_land, "A_LAND_", 35, ParametersG2, AP_AutoHelpLand),
 #endif
 
+    // @Group: ADisarm_
+    // @Path: AP_DisarmProtect.cpp
+    AP_SUBGROUPINFO(disarm_protect, "ADisarm_", 36, ParametersG2, AP_DisarmProtect),
+
     AP_GROUPEND
 };
 
