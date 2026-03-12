@@ -1145,6 +1145,7 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         _ahl_last_good_rngfnd_ms = 0;
         _ahl_rngfnd_was_ok = false;
         _ahl_ground_settle = 0;
+        _ahl_touched_ground = false;
     }
 
     // ==== rangefinder handling ====
@@ -1305,16 +1306,26 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         float throttle = ff_out + p_out + i_out;
 
         // ---- ground settle ----
-        // Below 0.5m with barely any descent: slowly reduce throttle to settle.
-        // This handles baro/rangefinder noise near ground preventing final touchdown.
-        if (alt_m < 0.5f && _ahl_descent_filt < target_ms * 0.3f) {
-            _ahl_ground_settle += dt * 0.08f;   // ~8% per second
-            _ahl_ground_settle = MIN(_ahl_ground_settle, 0.35f);
-        } else if (alt_m < 1.5f && _ahl_descent_filt < target_ms * 0.5f) {
-            _ahl_ground_settle += dt * 0.03f;   // ~3% per second
+        // Aircraft ground level is ~0.2m on rangefinder (landing gear height).
+        // Latch: once we've been below 0.3m, we know we touched ground.
+        // After touch, aggressively cut throttle to prevent bounce from ground
+        // effect (prop wash creates air cushion that lifts aircraft back up).
+        if (alt_m < 0.3f) {
+            _ahl_touched_ground = true;
+        }
+
+        if (_ahl_touched_ground) {
+            // We touched ground — keep cutting throttle even if we bounce up.
+            // Don't reset until disarm. This prevents the bounce cycle:
+            // touch → ground effect bounce → hover → touch → repeat
+            _ahl_ground_settle += dt * 0.25f;   // ~25% per second, aggressive
+            _ahl_ground_settle = MIN(_ahl_ground_settle, 0.45f);
+        } else if (alt_m < 1.0f && _ahl_descent_filt < target_ms * 0.5f) {
+            // Near ground but haven't touched yet — gentle reduction
+            _ahl_ground_settle += dt * 0.05f;
             _ahl_ground_settle = MIN(_ahl_ground_settle, 0.15f);
         } else {
-            // Above ground or descending normally: fast recovery
+            // Above ground, descending normally
             _ahl_ground_settle = MAX(_ahl_ground_settle - dt * 3.0f, 0.0f);
         }
         throttle -= _ahl_ground_settle;

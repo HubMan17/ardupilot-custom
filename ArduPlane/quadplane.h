@@ -635,6 +635,7 @@ private:
     bool _ahl_armed_flag = false;         // armed after climbing above threshold
     bool _ahl_rngfnd_was_ok = false;      // previous rangefinder state for transition detection
     float _ahl_ground_settle = 0.0f;      // ground settle throttle reduction accumulator
+    bool _ahl_touched_ground = false;     // latched true once alt < 0.3m (near rangefinder ground level)
 
     // min alt for navigation in takeoff
     AP_Float takeoff_navalt_min;
