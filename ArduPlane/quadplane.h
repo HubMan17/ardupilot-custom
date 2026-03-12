@@ -632,7 +632,6 @@ private:
     uint32_t _ahl_prev_rngfnd_ms = 0;     // timestamp of previous rangefinder reading
     float _ahl_last_good_rngfnd_alt = 0;  // last good rangefinder alt (m)
     uint32_t _ahl_last_good_rngfnd_ms = 0;// timestamp of last good rangefinder
-    uint32_t _ahl_last_log_ms = 0;        // last GCS telemetry timestamp
     bool _ahl_armed_flag = false;         // armed after climbing above threshold
     bool _ahl_rngfnd_was_ok = false;      // previous rangefinder state for transition detection
     float _ahl_ground_settle = 0.0f;      // ground settle throttle reduction accumulator

@@ -1122,17 +1122,8 @@ void QuadPlane::hold_stabilize(float throttle_in)
 
 /*
   Auto-help landing: descent limiting for QLoiter mode.
-  GPS branch: Z position controller with GPS rate table (unchanged).
+  GPS branch: Z position controller via land_at_climb_rate_cm (same as QLand).
   No-GPS branch: active FF+P+I throttle controller with rangefinder/baro fusion.
-
-  GCS telemetry (every 2s in no-GPS mode):
-    AHL: h=5.2R d=0.31/0.25 t=38 i=1.2 s=M g=0.00
-      h = altitude, R=rangefinder/B=baro/r=stale rangefinder
-      d = actual/target descent rate (m/s)
-      t = output throttle (%)
-      i = integral accumulator
-      s = rate source: E=EKF, M=mixed(EKF+rngfnd), R=rangefinder, B=baro
-      g = ground settle reduction
  */
 void QuadPlane::hold_auto_help_land(float throttle_in)
 {
@@ -1152,7 +1143,6 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         _ahl_prev_rngfnd_ms = 0;
         _ahl_last_good_rngfnd_alt = 0;
         _ahl_last_good_rngfnd_ms = 0;
-        _ahl_last_log_ms = 0;
         _ahl_rngfnd_was_ok = false;
         _ahl_ground_settle = 0;
     }
@@ -1193,10 +1183,8 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         _ahl_last_good_rngfnd_alt = rngfnd_alt;
         _ahl_last_good_rngfnd_ms = now;
 
-        // Detect rangefinder appearing
         if (!_ahl_rngfnd_was_ok) {
             _ahl_rngfnd_was_ok = true;
-            gcs().send_text(MAV_SEVERITY_INFO, "AHL: RNGF OK h=%.1f", (double)rngfnd_alt);
         }
     } else {
         // Rangefinder lost — decay the derived rate toward zero
@@ -1206,7 +1194,6 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
 
         if (_ahl_rngfnd_was_ok) {
             _ahl_rngfnd_was_ok = false;
-            gcs().send_text(MAV_SEVERITY_WARNING, "AHL: RNGF LOST, baro fallback");
         }
     }
 
@@ -1215,17 +1202,13 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
 
     // ==== best altitude estimate ====
     float alt_m;
-    char alt_src;
     if (rngfnd_ok) {
         alt_m = rngfnd_alt;
-        alt_src = 'R';
     } else if (rngfnd_recent) {
         // Stale rangefinder — use conservative (higher) of last reading and baro
         alt_m = MAX(_ahl_last_good_rngfnd_alt, plane.barometer.get_altitude());
-        alt_src = 'r';
     } else {
         alt_m = plane.barometer.get_altitude();
-        alt_src = 'B';
     }
 
     // ---- arm after climbing above 5m ----
@@ -1242,15 +1225,13 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         _ahl_ground_settle = 0;
     }
 
-    // ---- GPS: Z controller (proven, no changes) ----
+    // ---- GPS: Z controller (same pattern as QLand QPOS_LAND_DESCEND) ----
     if (have_gps && throttle_in <= thr_threshold && _ahl_armed_flag) {
-        const float baro_alt = plane.barometer.get_altitude();
-        const float max_descent_cms = get_ahl_descent_rate_cms(baro_alt, true);
+        const float height_above_ground = plane.relative_ground_altitude(plane.g.rangefinder_landing);
+        const float descent_rate_cms = landing_descent_rate_cms(height_above_ground);
 
         set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
-        pos_control->set_max_speed_accel_z(-max_descent_cms, pilot_velocity_z_max_up, pilot_accel_z);
-        pos_control->set_correction_speed_accel_z(-max_descent_cms, pilot_velocity_z_max_up, pilot_accel_z);
-        set_climb_rate_cms(-max_descent_cms);
+        pos_control->land_at_climb_rate_cm(-descent_rate_cms, descent_rate_cms > 0);
         run_z_controller();
 
     } else if (!have_gps && throttle_in <= thr_threshold && _ahl_armed_flag) {
@@ -1273,7 +1254,6 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
 
         // ---- descent rate: best available source ----
         float descent_ms = 0;
-        char rate_src = '?';
 
         Vector3f vel_ned;
         const bool ekf_ok = plane.ahrs.get_velocity_NED(vel_ned);
@@ -1286,16 +1266,12 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
             // Weight rangefinder more as altitude decreases
             const float rng_w = constrain_float(1.0f - alt_m / 10.0f, 0.2f, 0.7f);
             descent_ms = ekf_desc * (1.0f - rng_w) + rng_desc * rng_w;
-            rate_src = 'M';
         } else if (ekf_ok) {
             descent_ms = MAX(vel_ned.z, 0.0f);
-            rate_src = 'E';
         } else if (rngfnd_ok) {
             descent_ms = MAX(_ahl_rngfnd_rate_filt, 0.0f);
-            rate_src = 'R';
         } else {
             descent_ms = MAX(-plane.barometer.get_climb_rate(), 0.0f);
-            rate_src = 'B';
         }
 
         // EMA filter on final descent rate — tau ~0.25s
@@ -1345,19 +1321,6 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
 
         // Clamp output
         throttle = constrain_float(throttle, 0.0f, 0.85f);
-
-        // ---- GCS telemetry every 2s ----
-        if (now - _ahl_last_log_ms > 2000) {
-            _ahl_last_log_ms = now;
-            gcs().send_text(MAV_SEVERITY_INFO,
-                "AHL: h=%.1f%c d=%.2f/%.2f t=%.0f i=%.1f s=%c g=%.2f",
-                (double)alt_m, alt_src,
-                (double)_ahl_descent_filt, (double)target_ms,
-                (double)(throttle * 100.0f),
-                (double)_ahl_i_sum,
-                rate_src,
-                (double)_ahl_ground_settle);
-        }
 
         set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
         bool should_boost = true;
