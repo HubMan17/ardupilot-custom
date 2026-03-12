@@ -510,140 +510,193 @@ const AP_Param::GroupInfo QuadPlane::var_info2[] = {
 };
 
 // AP_AutoHelpLand parameter table — registered as A_LAND_* in ParametersG2
+// Управляет автоматическим снижением в режиме QLoiter.
+// Две ветки: GPS (Z-контроллер ArduPilot) и без GPS (свой FF+P+I контроллер).
+// Скорости снижения задаются отдельными таблицами для каждой ветки.
 const AP_Param::GroupInfo AP_AutoHelpLand::var_info[] = {
-    // GPS rate table
-    // @Param: G_RT3
-    // @DisplayName: GPS descent rate below 3m
-    // @Description: Maximum descent rate with GPS below 3 meters altitude
-    // @Units: cm/s
-    // @Range: 5 100
-    // @Increment: 1
-    // @User: Standard
-    AP_GROUPINFO("G_RT3", 1, AP_AutoHelpLand, g_rt_3, 10),
+
+    // =====================================================================
+    // ТАБЛИЦА СКОРОСТЕЙ СНИЖЕНИЯ С GPS
+    // =====================================================================
+    // Работает с GPS. Управление через стандартный Z-контроллер ArduPilot.
+    // Задает максимальную скорость снижения на каждой высоте.
+    // Между зонами скорость плавно интерполируется.
+    // Можно спокойно менять — это просто лимиты скорости для Z-контроллера.
 
     // @Param: G_RT5
-    // @DisplayName: GPS descent rate at 5m
-    // @Description: Maximum descent rate with GPS at 5 meters altitude
-    // @Units: cm/s
-    // @Range: 5 200
-    // @Increment: 1
-    // @User: Standard
-    AP_GROUPINFO("G_RT5", 2, AP_AutoHelpLand, g_rt_5, 15),
-
-    // @Param: G_RT7
-    // @DisplayName: GPS descent rate at 7m
-    // @Description: Maximum descent rate with GPS at 7 meters altitude
-    // @Units: cm/s
-    // @Range: 5 300
-    // @Increment: 1
-    // @User: Standard
-    AP_GROUPINFO("G_RT7", 3, AP_AutoHelpLand, g_rt_7, 25),
-
-    // @Param: G_RT10
-    // @DisplayName: GPS descent rate at 10m
-    // @Description: Maximum descent rate with GPS at 10 meters altitude
-    // @Units: cm/s
-    // @Range: 10 400
-    // @Increment: 1
-    // @User: Standard
-    AP_GROUPINFO("G_RT10", 4, AP_AutoHelpLand, g_rt_10, 30),
-
-    // @Param: G_RT20
-    // @DisplayName: GPS descent rate at 20m+
-    // @Description: Maximum descent rate with GPS at 20 meters and above
-    // @Units: cm/s
-    // @Range: 50 500
-    // @Increment: 5
-    // @User: Standard
-    AP_GROUPINFO("G_RT20", 5, AP_AutoHelpLand, g_rt_20, 150),
-
-    // No-GPS rate table
-    // @Param: N_RT3
-    // @DisplayName: No-GPS descent rate below 3m
-    // @Description: Maximum descent rate without GPS below 3 meters altitude
+    // @DisplayName: GPS: скорость снижения 5м и ниже
+    // @Description: Скорость снижения у самой земли (ниже 5 метров) при наличии GPS. Это самая медленная зона — финальный этап посадки. Если самолет снижается слишком резко у земли — уменьшите. Если зависает и не садится — увеличьте. Можно менять, безопасный параметр.
     // @Units: cm/s
     // @Range: 5 100
     // @Increment: 1
     // @User: Standard
-    AP_GROUPINFO("N_RT3", 6, AP_AutoHelpLand, n_rt_3, 10),
+    AP_GROUPINFO("G_RT5", 1, AP_AutoHelpLand, g_rt_5, 15),
 
-    // @Param: N_RT5
-    // @DisplayName: No-GPS descent rate at 5m
-    // @Description: Maximum descent rate without GPS at 5 meters altitude
+    // @Param: G_RT10
+    // @DisplayName: GPS: скорость снижения на 10м
+    // @Description: Скорость снижения на высоте около 10 метров при наличии GPS. Между 5м и 10м скорость плавно интерполируется. Увеличьте если снижение в этой зоне слишком медленное. Можно менять.
     // @Units: cm/s
-    // @Range: 5 200
+    // @Range: 10 200
     // @Increment: 1
     // @User: Standard
-    AP_GROUPINFO("N_RT5", 7, AP_AutoHelpLand, n_rt_5, 15),
+    AP_GROUPINFO("G_RT10", 2, AP_AutoHelpLand, g_rt_10, 50),
 
-    // @Param: N_RT7
-    // @DisplayName: No-GPS descent rate at 7m
-    // @Description: Maximum descent rate without GPS at 7 meters altitude
+    // @Param: G_RT20
+    // @DisplayName: GPS: скорость снижения на 20м
+    // @Description: Скорость снижения на высоте около 20 метров при наличии GPS. Между 10м и 20м интерполяция. Можно менять.
     // @Units: cm/s
-    // @Range: 5 300
-    // @Increment: 1
+    // @Range: 20 400
+    // @Increment: 5
     // @User: Standard
-    AP_GROUPINFO("N_RT7", 8, AP_AutoHelpLand, n_rt_7, 25),
+    AP_GROUPINFO("G_RT20", 3, AP_AutoHelpLand, g_rt_20, 100),
 
-    // @Param: N_RT10
-    // @DisplayName: No-GPS descent rate at 10m
-    // @Description: Maximum descent rate without GPS at 10 meters altitude
-    // @Units: cm/s
-    // @Range: 10 400
-    // @Increment: 1
-    // @User: Standard
-    AP_GROUPINFO("N_RT10", 9, AP_AutoHelpLand, n_rt_10, 30),
-
-    // @Param: N_RT20
-    // @DisplayName: No-GPS descent rate at 20m+
-    // @Description: Maximum descent rate without GPS at 20 meters and above
+    // @Param: G_RT40
+    // @DisplayName: GPS: скорость снижения на 40м
+    // @Description: Скорость снижения на высоте около 40 метров при наличии GPS. Между 20м и 40м интерполяция. Можно менять.
     // @Units: cm/s
     // @Range: 50 500
     // @Increment: 5
     // @User: Standard
-    AP_GROUPINFO("N_RT20", 10, AP_AutoHelpLand, n_rt_20, 150),
+    AP_GROUPINFO("G_RT40", 4, AP_AutoHelpLand, g_rt_40, 200),
 
-    // No-GPS tuning
+    // @Param: G_RT40P
+    // @DisplayName: GPS: скорость снижения выше 40м
+    // @Description: Скорость снижения на больших высотах (выше 40 метров) при наличии GPS. Постоянное значение, не интерполируется. Можно менять.
+    // @Units: cm/s
+    // @Range: 50 600
+    // @Increment: 10
+    // @User: Standard
+    AP_GROUPINFO("G_RT40P", 5, AP_AutoHelpLand, g_rt_40p, 300),
+
+    // =====================================================================
+    // ТАБЛИЦА СКОРОСТЕЙ СНИЖЕНИЯ БЕЗ GPS
+    // =====================================================================
+    // Работает без GPS. Управление через свой FF+P+I контроллер газа.
+    // Задает ЦЕЛЕВУЮ скорость снижения — контроллер подбирает газ
+    // чтобы снижаться именно с этой скоростью.
+    // Можно менять — это цель для контроллера.
+
+    // @Param: N_RT5
+    // @DisplayName: Без GPS: скорость снижения 5м и ниже
+    // @Description: Целевая скорость снижения у земли (ниже 5 метров) без GPS. Контроллер будет подбирать газ чтобы снижаться с этой скоростью. Самая медленная зона. Если самолет не садится — увеличьте. Если бьется о землю — уменьшите. Можно менять.
+    // @Units: cm/s
+    // @Range: 5 100
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("N_RT5", 6, AP_AutoHelpLand, n_rt_5, 15),
+
+    // @Param: N_RT10
+    // @DisplayName: Без GPS: скорость снижения на 10м
+    // @Description: Целевая скорость снижения на высоте около 10 метров без GPS. Между 5м и 10м интерполяция. Можно менять.
+    // @Units: cm/s
+    // @Range: 10 200
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("N_RT10", 7, AP_AutoHelpLand, n_rt_10, 50),
+
+    // @Param: N_RT20
+    // @DisplayName: Без GPS: скорость снижения на 20м
+    // @Description: Целевая скорость снижения на высоте около 20 метров без GPS. Между 10м и 20м интерполяция. Можно менять.
+    // @Units: cm/s
+    // @Range: 20 400
+    // @Increment: 5
+    // @User: Standard
+    AP_GROUPINFO("N_RT20", 8, AP_AutoHelpLand, n_rt_20, 100),
+
+    // @Param: N_RT40
+    // @DisplayName: Без GPS: скорость снижения на 40м
+    // @Description: Целевая скорость снижения на высоте около 40 метров без GPS. Между 20м и 40м интерполяция. Можно менять.
+    // @Units: cm/s
+    // @Range: 50 500
+    // @Increment: 5
+    // @User: Standard
+    AP_GROUPINFO("N_RT40", 9, AP_AutoHelpLand, n_rt_40, 200),
+
+    // @Param: N_RT40P
+    // @DisplayName: Без GPS: скорость снижения выше 40м
+    // @Description: Целевая скорость снижения на больших высотах (выше 40 метров) без GPS. Постоянное значение. Можно менять.
+    // @Units: cm/s
+    // @Range: 50 600
+    // @Increment: 10
+    // @User: Standard
+    AP_GROUPINFO("N_RT40P", 10, AP_AutoHelpLand, n_rt_40p, 300),
+
+    // =====================================================================
+    // КОЭФФИЦИЕНТЫ FF+P+I КОНТРОЛЛЕРА (только без GPS)
+    // =====================================================================
+    // Контроллер управляет газом напрямую по формуле:
+    //   газ = hover - FF*целевая_скорость + KP*ошибка + KI*интеграл
+    // НЕ РЕКОМЕНДУЕТСЯ менять без понимания — неправильные значения
+    // приведут к раскачке, зависанию или падению.
+
     // @Param: N_KP
-    // @DisplayName: No-GPS P gain
-    // @Description: Proportional gain for no-GPS descent rate controller. Higher values give faster response but may cause oscillation
+    // @DisplayName: Без GPS: P-коэффициент (пропорциональный)
+    // @Description: Реагирует на разницу между текущей и целевой скоростью снижения. Если самолет снижается быстрее цели — добавляет газ, медленнее — убавляет. Больше значение = быстрее реакция, но может начать раскачиваться (дергать газ вверх-вниз). НЕ РЕКОМЕНДУЕТСЯ менять без необходимости. Начните с дефолта 0.05.
     // @Range: 0.01 0.30
     // @Increment: 0.01
     // @User: Advanced
     AP_GROUPINFO("N_KP", 11, AP_AutoHelpLand, n_kp, 0.05),
 
     // @Param: N_KI
-    // @DisplayName: No-GPS I gain (reserved)
-    // @Description: Integral gain for no-GPS descent controller. Reserved for future use
+    // @DisplayName: Без GPS: I-коэффициент (интегральный)
+    // @Description: Медленно накапливает поправку если самолет постоянно не попадает в целевую скорость (из-за ветра, смещения центра тяжести, граунд-эффекта). Убирает постоянную ошибку. Имеет защиту от накрутки (антивиндап). НЕ РЕКОМЕНДУЕТСЯ менять. Слишком большое значение — медленная раскачка. Слишком маленькое — зависание на одной высоте.
     // @Range: 0.005 0.10
     // @Increment: 0.005
     // @User: Advanced
     AP_GROUPINFO("N_KI", 12, AP_AutoHelpLand, n_ki, 0.02),
 
     // @Param: N_FF
-    // @DisplayName: No-GPS feed-forward gain
-    // @Description: Feed-forward gain for no-GPS descent controller. Throttle = hover - FF * target_rate + KP * error. Higher = more throttle reduction per m/s of target descent rate
+    // @DisplayName: Без GPS: Feed-Forward (прямая связь)
+    // @Description: Задает базовый уровень газа для снижения. Чем больше целевая скорость снижения — тем сильнее уменьшается газ от ховера. Формула: газ = hover - FF * целевая_скорость. Это главная настройка контроллера. Если самолет снижается слишком медленно — можно немного увеличить (0.06-0.08). Если слишком быстро — уменьшить (0.03-0.04). Менять осторожно, шагами по 0.01.
     // @Range: 0.01 0.20
     // @Increment: 0.01
     // @User: Standard
     AP_GROUPINFO("N_FF", 13, AP_AutoHelpLand, n_ff, 0.05),
 
-    // @Param: N_STL
-    // @DisplayName: No-GPS ground settle rate
-    // @Description: Throttle reduction rate when aircraft is barely descending near ground. Higher = faster settling but more aggressive throttle cut. Set 0 to disable
-    // @Range: 0 0.10
-    // @Increment: 0.005
-    // @User: Standard
-    AP_GROUPINFO("N_STL", 14, AP_AutoHelpLand, n_stl, 0.03),
+    // 14, 15: зарезервированы (ранее N_STL и N_GALT)
 
-    // @Param: N_GALT
-    // @DisplayName: No-GPS ground settle altitude
-    // @Description: Ground settling is only active below this barometric altitude. Above it, pure feed-forward + P control
+    // =====================================================================
+    // ЗАЩИТА ДАЛЬНОМЕРА ОТ ПОМЕХ
+    // =====================================================================
+
+    // @Param: SL_ALT
+    // @DisplayName: Высота включения фильтра дальномера
+    // @Description: Ниже этой высоты показания дальномера фильтруются по скорости изменения. Нужно для защиты от ложных скачков из-за пыли, снега, травы или помех. Если дальномер глючит у земли — включите (поставьте высоту выше зоны помех). 0 = фильтр выключен. Можно менять.
     // @Units: m
+    // @Range: 0 50
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("SL_ALT", 16, AP_AutoHelpLand, sl_alt, 15.0),
+
+    // @Param: SL_SPD
+    // @DisplayName: Макс. скорость изменения дальномера
+    // @Description: Насколько быстро могут меняться показания дальномера за секунду (когда фильтр активен ниже SL_ALT). Если слишком маленькое — дальномер будет отставать при реальном быстром снижении. Если слишком большое — не будет фильтровать помехи. Дефолт 5 м/с обычно подходит. Можно менять.
+    // @Units: m/s
     // @Range: 1 20
     // @Increment: 0.5
     // @User: Standard
-    AP_GROUPINFO("N_GALT", 15, AP_AutoHelpLand, n_galt, 3.0),
+    AP_GROUPINFO("SL_SPD", 17, AP_AutoHelpLand, sl_spd, 5.0),
+
+    // =====================================================================
+    // ПРОЧИЕ НАСТРОЙКИ
+    // =====================================================================
+
+    // @Param: N_HOVR
+    // @DisplayName: Без GPS: ручная установка газа ховера
+    // @Description: Базовый уровень газа для зависания, от которого контроллер отсчитывает снижение. 0 = брать автоматическое значение из Q_M_THST_HOVER (рекомендуется). Установите вручную только если автоматическое значение скачет или неправильное (например в холод, с нестандартным весом). Значение от 0.30 до 0.60 обычно. НЕ РЕКОМЕНДУЕТСЯ менять без причины.
+    // @Range: 0 0.8
+    // @Increment: 0.01
+    // @User: Advanced
+    AP_GROUPINFO("N_HOVR", 18, AP_AutoHelpLand, n_hovr, 0),
+
+    // @Param: GND_ALT
+    // @DisplayName: Высота определения касания земли
+    // @Description: Когда дальномер показывает высоту НИЖЕ этого значения — система считает что самолет коснулся земли и начинает агрессивно снижать газ до полной остановки моторов. Должен быть чуть выше реальной высоты шасси на земле. Например: шасси 20 см от земли — ставим 0.30. После касания, если самолет подскочит (граунд-эффект), газ все равно продолжит снижаться. Сброс только при наборе высоты выше 3м или дизарме. Можно менять под свое шасси.
+    // @Units: m
+    // @Range: 0.1 1.0
+    // @Increment: 0.05
+    // @User: Standard
+    AP_GROUPINFO("GND_ALT", 19, AP_AutoHelpLand, gnd_alt, 0.30),
 
     AP_GROUPEND
 };
@@ -1212,9 +1265,19 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         alt_m = plane.barometer.get_altitude();
     }
 
-    // ---- arm after climbing above 5m ----
-    if (!_ahl_armed_flag && alt_m > 5.0f) {
-        _ahl_armed_flag = true;
+    // ---- arm/re-arm: system activates above 3m, resets landing state ----
+    // This handles: initial takeoff, re-takeoff without disarm, mode switch back
+    if (alt_m > 3.0f) {
+        if (!_ahl_armed_flag) {
+            _ahl_armed_flag = true;
+        }
+        // Reset landing state if we climbed back up (re-takeoff or mode switch)
+        if (_ahl_touched_ground) {
+            _ahl_touched_ground = false;
+            _ahl_ground_settle = 0;
+            _ahl_i_sum = 0;
+            _ahl_descent_filt = 0;
+        }
     }
 
     const bool have_gps = AP::gps().status() >= AP_GPS::GPS_OK_FIX_2D;
@@ -1226,13 +1289,14 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         _ahl_ground_settle = 0;
     }
 
-    // ---- GPS: Z controller (same pattern as QLand QPOS_LAND_DESCEND) ----
+    // ---- GPS: Z controller with A_LAND_G_RT* rate table ----
     if (have_gps && throttle_in <= thr_threshold && _ahl_armed_flag) {
-        const float height_above_ground = plane.relative_ground_altitude(plane.g.rangefinder_landing);
-        const float descent_rate_cms = landing_descent_rate_cms(height_above_ground);
+        const float descent_rate_cms = get_ahl_descent_rate_cms(alt_m, true);
 
         set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
-        pos_control->land_at_climb_rate_cm(-descent_rate_cms, descent_rate_cms > 0);
+        pos_control->set_max_speed_accel_z(-descent_rate_cms, pilot_velocity_z_max_up, pilot_accel_z);
+        pos_control->set_correction_speed_accel_z(-descent_rate_cms, pilot_velocity_z_max_up, pilot_accel_z);
+        set_climb_rate_cms(-descent_rate_cms);
         run_z_controller();
 
     } else if (!have_gps && throttle_in <= thr_threshold && _ahl_armed_flag) {
@@ -1310,7 +1374,8 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         // Latch: once we've been below 0.3m, we know we touched ground.
         // After touch, aggressively cut throttle to prevent bounce from ground
         // effect (prop wash creates air cushion that lifts aircraft back up).
-        if (alt_m < 0.3f) {
+        const float gnd_touch_alt = plane.g2.auto_help_land.gnd_alt.get();
+        if (alt_m < gnd_touch_alt) {
             _ahl_touched_ground = true;
         }
 
@@ -1631,30 +1696,27 @@ float QuadPlane::landing_descent_rate_cms(float height_above_ground)
 }
 
 /*
-  return maximum descent rate in cm/s for QSTABILIZE descent limiting,
-  based on barometric altitude. Uses linear interpolation between zones.
- */
-/*
-  Get altitude-dependent descent rate limit from A_LAND_* rate table.
-  Selects GPS (G_RT*) or no-GPS (N_RT*) table based on gps flag.
-  Returns rate in cm/s.
+  Скорость снижения по высоте из таблицы A_LAND_*.
+  Зоны: <=5м / 5-10м / 10-20м / 20-40м / 40м+
+  Между зонами — линейная интерполяция.
+  gps=true: GPS таблица (G_RT*), gps=false: No-GPS таблица (N_RT*).
+  Возвращает скорость в см/с.
  */
 float QuadPlane::get_ahl_descent_rate_cms(float alt_m, bool gps) const
 {
     const AP_AutoHelpLand &p = plane.g2.auto_help_land;
 
-    const float r3  = gps ? p.g_rt_3.get()  : p.n_rt_3.get();
-    const float r5  = gps ? p.g_rt_5.get()  : p.n_rt_5.get();
-    const float r7  = gps ? p.g_rt_7.get()  : p.n_rt_7.get();
-    const float r10 = gps ? p.g_rt_10.get() : p.n_rt_10.get();
-    const float r20 = gps ? p.g_rt_20.get() : p.n_rt_20.get();
+    const float r5   = gps ? p.g_rt_5.get()   : p.n_rt_5.get();
+    const float r10  = gps ? p.g_rt_10.get()  : p.n_rt_10.get();
+    const float r20  = gps ? p.g_rt_20.get()  : p.n_rt_20.get();
+    const float r40  = gps ? p.g_rt_40.get()  : p.n_rt_40.get();
+    const float r40p = gps ? p.g_rt_40p.get() : p.n_rt_40p.get();
 
-    if (alt_m < 3.0f)  return r3;
-    if (alt_m < 5.0f)  return linear_interpolate(r3, r5, alt_m, 3.0f, 5.0f);
-    if (alt_m < 7.0f)  return linear_interpolate(r5, r7, alt_m, 5.0f, 7.0f);
-    if (alt_m < 10.0f) return linear_interpolate(r7, r10, alt_m, 7.0f, 10.0f);
+    if (alt_m < 5.0f)  return r5;
+    if (alt_m < 10.0f) return linear_interpolate(r5, r10, alt_m, 5.0f, 10.0f);
     if (alt_m < 20.0f) return linear_interpolate(r10, r20, alt_m, 10.0f, 20.0f);
-    return r20;
+    if (alt_m < 40.0f) return linear_interpolate(r20, r40, alt_m, 20.0f, 40.0f);
+    return r40p;
 }
 
 // compute_ahl_nogps_throttle() removed — logic moved inline into hold_auto_help_land()

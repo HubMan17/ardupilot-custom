@@ -37,17 +37,19 @@ public:
     AP_AutoHelpLand() { AP_Param::setup_object_defaults(this, var_info); }
     static const struct AP_Param::GroupInfo var_info[];
 
-    // GPS rate table
-    AP_Float g_rt_3, g_rt_5, g_rt_7, g_rt_10, g_rt_20;
-    // No-GPS rate table
-    AP_Float n_rt_3, n_rt_5, n_rt_7, n_rt_10, n_rt_20;
-    // No-GPS tuning
-    AP_Float n_kp, n_ki, n_ff, n_stl, n_galt;
+    // GPS rate table: <=5m / 5-10m / 10-20m / 20-40m / 40m+
+    AP_Float g_rt_5, g_rt_10, g_rt_20, g_rt_40, g_rt_40p;
+    // No-GPS rate table: <=5m / 5-10m / 10-20m / 20-40m / 40m+
+    AP_Float n_rt_5, n_rt_10, n_rt_20, n_rt_40, n_rt_40p;
+    // No-GPS tuning (FF+P+I controller)
+    AP_Float n_kp, n_ki, n_ff;
     // Slew rate limit (snow/dust protection)
     AP_Float sl_alt;    // altitude below which slew rate is active (m)
     AP_Float sl_spd;    // max altitude change rate (m/s)
-    // Hover throttle override for FF+P controller
+    // Hover throttle override for FF+P+I controller
     AP_Float n_hovr;    // 0 = use Q_M_THST_HOVER
+    // Ground touch detection altitude (rangefinder, m)
+    AP_Float gnd_alt;   // below this = touched ground, start cutting throttle
 };
 
 /*
