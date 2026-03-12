@@ -43,6 +43,11 @@ public:
     AP_Float n_rt_3, n_rt_5, n_rt_7, n_rt_10, n_rt_20;
     // No-GPS tuning
     AP_Float n_kp, n_ki, n_ff, n_stl, n_galt;
+    // Slew rate limit (snow/dust protection)
+    AP_Float sl_alt;    // altitude below which slew rate is active (m)
+    AP_Float sl_spd;    // max altitude change rate (m/s)
+    // Hover throttle override for FF+P controller
+    AP_Float n_hovr;    // 0 = use Q_M_THST_HOVER
 };
 
 /*
@@ -305,7 +310,7 @@ private:
     // Auto-help landing: descent limiting for QLoiter
     void hold_auto_help_land(float throttle_in);
     float get_ahl_descent_rate_cms(float alt_m, bool gps) const;
-    float compute_ahl_nogps_throttle(void);
+    // compute_ahl_nogps_throttle removed — logic inlined in hold_auto_help_land
 
     // setup correct aux channels for frame class
     void setup_default_channels(uint8_t num_motors);
@@ -619,8 +624,18 @@ private:
     // AHRS alt for land abort and package place, meters
     float land_descend_start_alt;
 
-    float _ahl_nogps_i_sum = 0.0f;      // settle accumulator for no-GPS descent limiting
-    float _ahl_nogps_ema_descent = 0.0f; // EMA-filtered descent rate (m/s)
+    // Auto-help-land no-GPS descent controller state
+    float _ahl_i_sum = 0.0f;              // integral accumulator (m/s * s)
+    float _ahl_descent_filt = 0.0f;       // filtered descent rate from best source (m/s, +down)
+    float _ahl_rngfnd_rate_filt = 0.0f;   // rangefinder-derived descent rate, filtered (m/s, +down)
+    float _ahl_prev_rngfnd_alt = -1.0f;   // previous rangefinder altitude for rate calc (m)
+    uint32_t _ahl_prev_rngfnd_ms = 0;     // timestamp of previous rangefinder reading
+    float _ahl_last_good_rngfnd_alt = 0;  // last good rangefinder alt (m)
+    uint32_t _ahl_last_good_rngfnd_ms = 0;// timestamp of last good rangefinder
+    uint32_t _ahl_last_log_ms = 0;        // last GCS telemetry timestamp
+    bool _ahl_armed_flag = false;         // armed after climbing above threshold
+    bool _ahl_rngfnd_was_ok = false;      // previous rangefinder state for transition detection
+    float _ahl_ground_settle = 0.0f;      // ground settle throttle reduction accumulator
 
     // min alt for navigation in takeoff
     AP_Float takeoff_navalt_min;

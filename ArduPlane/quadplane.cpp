@@ -1122,38 +1122,130 @@ void QuadPlane::hold_stabilize(float throttle_in)
 
 /*
   Auto-help landing: descent limiting for QLoiter mode.
-  Same logic as the old custom hold_stabilize() but references A_LAND_* params.
-  GPS branch uses Z position controller with GPS rate table.
-  No-GPS branch uses FF+P baro-only controller with no-GPS rate table.
+  GPS branch: Z position controller with GPS rate table (unchanged).
+  No-GPS branch: active FF+P+I throttle controller with rangefinder/baro fusion.
+
+  GCS telemetry (every 2s in no-GPS mode):
+    AHL: h=5.2R d=0.31/0.25 t=38 i=1.2 s=M g=0.00
+      h = altitude, R=rangefinder/B=baro/r=stale rangefinder
+      d = actual/target descent rate (m/s)
+      t = output throttle (%)
+      i = integral accumulator
+      s = rate source: E=EKF, M=mixed(EKF+rngfnd), R=rangefinder, B=baro
+      g = ground settle reduction
  */
 void QuadPlane::hold_auto_help_land(float throttle_in)
 {
-    // call attitude controller
+    // ---- attitude ----
     multicopter_attitude_rate_update(get_desired_yaw_rate_cds(false));
 
-    // descent limiting: arm after climbing above 5 m
-    static bool descent_limit_armed = false;
+    const uint32_t now = AP_HAL::millis();
+    const float dt = plane.scheduler.get_loop_period_s();
+
+    // ---- reset on disarm ----
     if (!motors->armed()) {
-        descent_limit_armed = false;
-        _ahl_nogps_i_sum = 0.0f;
-        _ahl_nogps_ema_descent = 0.0f;
+        _ahl_armed_flag = false;
+        _ahl_i_sum = 0;
+        _ahl_descent_filt = 0;
+        _ahl_rngfnd_rate_filt = 0;
+        _ahl_prev_rngfnd_alt = -1.0f;
+        _ahl_prev_rngfnd_ms = 0;
+        _ahl_last_good_rngfnd_alt = 0;
+        _ahl_last_good_rngfnd_ms = 0;
+        _ahl_last_log_ms = 0;
+        _ahl_rngfnd_was_ok = false;
+        _ahl_ground_settle = 0;
     }
-    if (!descent_limit_armed && plane.barometer.get_altitude() > 5.0f) {
-        descent_limit_armed = true;
+
+    // ==== rangefinder handling ====
+    const bool rngfnd_ok =
+        (plane.rangefinder.status_orient(ROTATION_PITCH_270) == RangeFinder::Status::Good);
+    float rngfnd_alt = 0;
+
+    if (rngfnd_ok) {
+        rngfnd_alt = plane.rangefinder.distance_cm_orient(ROTATION_PITCH_270) * 0.01f;
+
+        // Slew rate limit: reject impossible altitude jumps (dust/snow/glitch)
+        const AP_AutoHelpLand &sp = plane.g2.auto_help_land;
+        if (_ahl_last_good_rngfnd_ms > 0 && sp.sl_alt.get() > 0 &&
+            rngfnd_alt < sp.sl_alt.get()) {
+            const float dt_rng = (now - _ahl_last_good_rngfnd_ms) * 0.001f;
+            const float max_change = sp.sl_spd.get() * MAX(dt_rng, 0.001f);
+            rngfnd_alt = constrain_float(rngfnd_alt,
+                _ahl_last_good_rngfnd_alt - max_change,
+                _ahl_last_good_rngfnd_alt + max_change);
+        }
+
+        // Compute rangefinder-derived descent rate (differentiation + EMA filter)
+        if (_ahl_prev_rngfnd_ms > 0) {
+            const uint32_t dt_ms = now - _ahl_prev_rngfnd_ms;
+            if (dt_ms > 0 && dt_ms < 500) {
+                // positive = descending (prev was higher)
+                const float raw_rate = (_ahl_prev_rngfnd_alt - rngfnd_alt) / (dt_ms * 0.001f);
+                // EMA filter tau ~0.3s
+                const float alpha_r = constrain_float(3.3f * dt, 0.0f, 1.0f);
+                _ahl_rngfnd_rate_filt = _ahl_rngfnd_rate_filt * (1.0f - alpha_r) + raw_rate * alpha_r;
+            }
+        }
+        _ahl_prev_rngfnd_alt = rngfnd_alt;
+        _ahl_prev_rngfnd_ms = now;
+
+        _ahl_last_good_rngfnd_alt = rngfnd_alt;
+        _ahl_last_good_rngfnd_ms = now;
+
+        // Detect rangefinder appearing
+        if (!_ahl_rngfnd_was_ok) {
+            _ahl_rngfnd_was_ok = true;
+            gcs().send_text(MAV_SEVERITY_INFO, "AHL: RNGF OK h=%.1f", (double)rngfnd_alt);
+        }
+    } else {
+        // Rangefinder lost — decay the derived rate toward zero
+        _ahl_rngfnd_rate_filt *= (1.0f - 2.0f * dt);
+        _ahl_prev_rngfnd_alt = -1.0f;
+        _ahl_prev_rngfnd_ms = 0;
+
+        if (_ahl_rngfnd_was_ok) {
+            _ahl_rngfnd_was_ok = false;
+            gcs().send_text(MAV_SEVERITY_WARNING, "AHL: RNGF LOST, baro fallback");
+        }
+    }
+
+    const bool rngfnd_recent = (_ahl_last_good_rngfnd_ms > 0) &&
+        (now - _ahl_last_good_rngfnd_ms < 2000);
+
+    // ==== best altitude estimate ====
+    float alt_m;
+    char alt_src;
+    if (rngfnd_ok) {
+        alt_m = rngfnd_alt;
+        alt_src = 'R';
+    } else if (rngfnd_recent) {
+        // Stale rangefinder — use conservative (higher) of last reading and baro
+        alt_m = MAX(_ahl_last_good_rngfnd_alt, plane.barometer.get_altitude());
+        alt_src = 'r';
+    } else {
+        alt_m = plane.barometer.get_altitude();
+        alt_src = 'B';
+    }
+
+    // ---- arm after climbing above 5m ----
+    if (!_ahl_armed_flag && alt_m > 5.0f) {
+        _ahl_armed_flag = true;
     }
 
     const bool have_gps = AP::gps().status() >= AP_GPS::GPS_OK_FIX_2D;
-    const float descent_limit_throttle_threshold = 0.40f;
+    const float thr_threshold = 0.40f;
 
     if (have_gps) {
-        _ahl_nogps_i_sum = 0.0f;
-        _ahl_nogps_ema_descent = 0.0f;
+        // Reset no-GPS state when GPS is present
+        _ahl_i_sum = 0;
+        _ahl_ground_settle = 0;
     }
 
-    if (have_gps && throttle_in <= descent_limit_throttle_threshold && descent_limit_armed) {
-        // GPS available: controlled descent using Z position controller
-        const float alt_m = plane.barometer.get_altitude();
-        const float max_descent_cms = get_ahl_descent_rate_cms(alt_m, true);
+    // ---- GPS: Z controller (proven, no changes) ----
+    if (have_gps && throttle_in <= thr_threshold && _ahl_armed_flag) {
+        const float baro_alt = plane.barometer.get_altitude();
+        const float max_descent_cms = get_ahl_descent_rate_cms(baro_alt, true);
 
         set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
         pos_control->set_max_speed_accel_z(-max_descent_cms, pilot_velocity_z_max_up, pilot_accel_z);
@@ -1161,23 +1253,124 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         set_climb_rate_cms(-max_descent_cms);
         run_z_controller();
 
-    } else if (!have_gps && throttle_in <= descent_limit_throttle_threshold && descent_limit_armed) {
-        // No-GPS descent limiting: smoothed throttle floor, always >= 0
-        const float floor_thr = compute_ahl_nogps_throttle();
-        const float final_thr = MAX(throttle_in, floor_thr);
+    } else if (!have_gps && throttle_in <= thr_threshold && _ahl_armed_flag) {
+        // =============================================================
+        // NO-GPS: Active FF+P+I descent rate controller
+        // =============================================================
+        // Actively commands throttle to achieve target descent rate.
+        //   throttle = hover - FF*target + KP*error + KI*integral
+        // FF: baseline reduction from hover for target descent rate
+        // KP: react to rate error (too fast → add throttle)
+        // KI: eliminate steady-state offset (e.g. wind, CG, ground effect)
+        //
+        // Altitude: rangefinder (primary) → baro (fallback)
+        // Rate: EKF+rangefinder blend (below 10m) → EKF → baro rate
+        // =============================================================
+
+        const AP_AutoHelpLand &p = plane.g2.auto_help_land;
+        const float hover = (p.n_hovr.get() > 0.01f) ? p.n_hovr.get()
+                                                       : motors->get_throttle_hover();
+
+        // ---- descent rate: best available source ----
+        float descent_ms = 0;
+        char rate_src = '?';
+
+        Vector3f vel_ned;
+        const bool ekf_ok = plane.ahrs.get_velocity_NED(vel_ned);
+
+        if (ekf_ok && rngfnd_ok && alt_m < 10.0f) {
+            // Below 10m with rangefinder: blend EKF and rangefinder-derived rate.
+            // Rangefinder rate is more direct near ground, EKF is smoother.
+            const float ekf_desc = MAX(vel_ned.z, 0.0f);
+            const float rng_desc = MAX(_ahl_rngfnd_rate_filt, 0.0f);
+            // Weight rangefinder more as altitude decreases
+            const float rng_w = constrain_float(1.0f - alt_m / 10.0f, 0.2f, 0.7f);
+            descent_ms = ekf_desc * (1.0f - rng_w) + rng_desc * rng_w;
+            rate_src = 'M';
+        } else if (ekf_ok) {
+            descent_ms = MAX(vel_ned.z, 0.0f);
+            rate_src = 'E';
+        } else if (rngfnd_ok) {
+            descent_ms = MAX(_ahl_rngfnd_rate_filt, 0.0f);
+            rate_src = 'R';
+        } else {
+            descent_ms = MAX(-plane.barometer.get_climb_rate(), 0.0f);
+            rate_src = 'B';
+        }
+
+        // EMA filter on final descent rate — tau ~0.25s
+        const float alpha = constrain_float(4.0f * dt, 0.0f, 1.0f);
+        _ahl_descent_filt = _ahl_descent_filt * (1.0f - alpha) + descent_ms * alpha;
+
+        // ---- target descent rate from altitude table ----
+        const float target_ms = get_ahl_descent_rate_cms(alt_m, false) * 0.01f;
+
+        // ---- FF+P+I controller ----
+        // error > 0: descending too fast → need more throttle
+        // error < 0: too slow / ascending → need less throttle (let it descend)
+        const float error = _ahl_descent_filt - target_ms;
+
+        // Feed-forward: baseline throttle for desired descent rate
+        const float ff_out = hover - p.n_ff.get() * target_ms;
+
+        // Proportional: immediate reaction to rate error
+        const float p_out = p.n_kp.get() * error;
+
+        // Integral: eliminate steady-state error
+        // Anti-windup: freeze integration when output is saturated
+        const float thr_preview = ff_out + p_out + p.n_ki.get() * _ahl_i_sum;
+        if (thr_preview > 0.02f && thr_preview < 0.85f) {
+            _ahl_i_sum += error * dt;
+        }
+        // Clamp: positive = holding up too much, negative = pushing down for landing
+        _ahl_i_sum = constrain_float(_ahl_i_sum, -8.0f, 8.0f);
+        const float i_out = p.n_ki.get() * _ahl_i_sum;
+
+        float throttle = ff_out + p_out + i_out;
+
+        // ---- ground settle ----
+        // Below 0.5m with barely any descent: slowly reduce throttle to settle.
+        // This handles baro/rangefinder noise near ground preventing final touchdown.
+        if (alt_m < 0.5f && _ahl_descent_filt < target_ms * 0.3f) {
+            _ahl_ground_settle += dt * 0.08f;   // ~8% per second
+            _ahl_ground_settle = MIN(_ahl_ground_settle, 0.35f);
+        } else if (alt_m < 1.5f && _ahl_descent_filt < target_ms * 0.5f) {
+            _ahl_ground_settle += dt * 0.03f;   // ~3% per second
+            _ahl_ground_settle = MIN(_ahl_ground_settle, 0.15f);
+        } else {
+            // Above ground or descending normally: fast recovery
+            _ahl_ground_settle = MAX(_ahl_ground_settle - dt * 3.0f, 0.0f);
+        }
+        throttle -= _ahl_ground_settle;
+
+        // Clamp output
+        throttle = constrain_float(throttle, 0.0f, 0.85f);
+
+        // ---- GCS telemetry every 2s ----
+        if (now - _ahl_last_log_ms > 2000) {
+            _ahl_last_log_ms = now;
+            gcs().send_text(MAV_SEVERITY_INFO,
+                "AHL: h=%.1f%c d=%.2f/%.2f t=%.0f i=%.1f s=%c g=%.2f",
+                (double)alt_m, alt_src,
+                (double)_ahl_descent_filt, (double)target_ms,
+                (double)(throttle * 100.0f),
+                (double)_ahl_i_sum,
+                rate_src,
+                (double)_ahl_ground_settle);
+        }
+
         set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
         bool should_boost = true;
         if (tailsitter.enabled() && assisted_flight) {
             should_boost = false;
         }
-        attitude_control->set_throttle_out(final_thr, should_boost, 0);
+        attitude_control->set_throttle_out(throttle, should_boost, 0);
 
     } else if ((throttle_in <= 0) && !air_mode_active()) {
         set_desired_spool_state(AP_Motors::DesiredSpoolState::GROUND_IDLE);
         attitude_control->set_throttle_out(0, true, 0);
         relax_attitude_control();
     } else {
-        // normal throttle pass-through
         set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
         bool should_boost = true;
         if (tailsitter.enabled() && assisted_flight) {
@@ -1490,65 +1683,7 @@ float QuadPlane::get_ahl_descent_rate_cms(float alt_m, bool gps) const
     return r20;
 }
 
-/*
-  Descent rate controller for no-GPS auto-help landing.
-  Feed-forward + P design (no integral = no windup):
-    throttle = hover - FF * target_rate + KP * error
-  FF provides steady-state offset: higher target rate = lower throttle.
-  KP corrects for deviations from target rate.
-  Active until disarm (no altitude cutoff — baro can drift negative).
- */
-float QuadPlane::compute_ahl_nogps_throttle(void)
-{
-    const AP_AutoHelpLand &p = plane.g2.auto_help_land;
-    const float dt = plane.scheduler.get_loop_period_s();
-    const float alt_m = plane.barometer.get_altitude();
-    const float climb_rate_ms = plane.barometer.get_climb_rate();        // m/s, + up
-    const float raw_descent_ms = MAX(-climb_rate_ms, 0.0f);             // m/s, + down
-
-    // EMA filter on descent rate to suppress baro noise spikes near ground.
-    // tau ~0.2s: smooths out 1-2 tick spikes while responding within ~0.3s.
-    const float alpha = constrain_float(5.0f * dt, 0.0f, 1.0f);
-    _ahl_nogps_ema_descent = _ahl_nogps_ema_descent * (1.0f - alpha) + raw_descent_ms * alpha;
-    const float descent_rate_ms = _ahl_nogps_ema_descent;
-
-    const float target_rate_ms = get_ahl_descent_rate_cms(alt_m, false) * 0.01f;
-    const float hover_thr = motors->get_throttle_hover();
-
-    // error > 0: descending too fast (need more throttle)
-    // error < 0: descending too slow or ascending (can reduce throttle)
-    const float error = descent_rate_ms - target_rate_ms;
-
-    const float kP = p.n_kp.get();
-    const float ff = p.n_ff.get();
-
-    // Feed-forward: reduce throttle below hover proportional to target rate
-    // P correction: adds/removes throttle based on rate error
-    float throttle = hover_thr - ff * target_rate_ms + kP * error;
-
-    // Ground settling: only active below N_GALT.
-    // When barely descending near ground, slowly reduce throttle so
-    // aircraft settles. Fast recovery when descent resumes.
-    const float settle_rate = p.n_stl.get();
-    const float settle_alt = p.n_galt.get();
-    if (settle_rate > 0.001f && alt_m < settle_alt) {
-        if (descent_rate_ms < 0.05f) {
-            // barely moving vertically — accumulate (slow: 5s to max)
-            _ahl_nogps_i_sum = MIN(_ahl_nogps_i_sum + dt, 5.0f);
-        } else {
-            // descending normally — decay fast (1s from max to 0)
-            _ahl_nogps_i_sum = MAX(_ahl_nogps_i_sum - 5.0f * dt, 0.0f);
-        }
-        throttle -= _ahl_nogps_i_sum * settle_rate;
-    } else {
-        // above settle altitude — reset accumulator
-        _ahl_nogps_i_sum = MAX(_ahl_nogps_i_sum - 5.0f * dt, 0.0f);
-    }
-
-    throttle = constrain_float(throttle, 0.0f, hover_thr + 0.25f);
-
-    return throttle;
-}
+// compute_ahl_nogps_throttle() removed — logic moved inline into hold_auto_help_land()
 
 /*
   get pilot input yaw rate in cd/s
