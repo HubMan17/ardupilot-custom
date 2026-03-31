@@ -1327,9 +1327,21 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
                                                        : motors->get_throttle_hover();
 
         // ---- ground contact detection ----
+        // Primary: alt_m (filtered/fallback altitude) below threshold.
+        // Backup: last good rangefinder reading below threshold.
+        //   Near ground the radar flickers invalid (status != Good) so
+        //   alt_m falls back to MAX(last_good, baro) which stays above
+        //   GND_ALT — even though SonarRange briefly showed a low value.
+        //   Catching that brief valid low reading prevents missed landing.
         const float gnd_touch_alt = p.gnd_alt.get();
-        if (!_ahl_touched_ground && alt_m < gnd_touch_alt) {
-            _ahl_touched_ground = true;
+        if (!_ahl_touched_ground) {
+            if (alt_m < gnd_touch_alt) {
+                _ahl_touched_ground = true;
+            } else if (_ahl_last_good_rngfnd_alt > 0.01f &&
+                       _ahl_last_good_rngfnd_alt < gnd_touch_alt &&
+                       (now - _ahl_last_good_rngfnd_ms) < 1000) {
+                _ahl_touched_ground = true;
+            }
         }
 
         float throttle;
