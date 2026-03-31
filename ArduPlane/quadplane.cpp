@@ -1256,7 +1256,13 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
 
     // ==== best altitude estimate ====
     float alt_m;
-    if (rngfnd_ok) {
+    if (_ahl_touched_ground) {
+        // After ground contact — freeze altitude low, ignore rangefinder.
+        // Radar gives garbage below 0.5m (256m "no target" or random values
+        // like 0.8m). Trusting it would reset ground_settle and cause bouncing.
+        const float gnd_alt = plane.g2.auto_help_land.gnd_alt.get();
+        alt_m = gnd_alt * 0.5f;
+    } else if (rngfnd_ok) {
         alt_m = rngfnd_alt;
     } else if (rngfnd_recent) {
         // Stale rangefinder — use conservative (higher) of last reading and baro
@@ -1267,7 +1273,10 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
 
     // ---- arm/re-arm: system activates above 3m, resets landing state ----
     // This handles: initial takeoff, re-takeoff without disarm, mode switch back
-    if (alt_m > 3.0f) {
+    // Use barometer only — rangefinder is unreliable near ground and frozen
+    // after touched_ground. Barometer is always available and doesn't glitch.
+    const float baro_alt = plane.barometer.get_altitude();
+    if (baro_alt > 3.0f) {
         if (!_ahl_armed_flag) {
             _ahl_armed_flag = true;
         }
