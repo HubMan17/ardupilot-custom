@@ -1326,93 +1326,94 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         const float hover = (p.n_hovr.get() > 0.01f) ? p.n_hovr.get()
                                                        : motors->get_throttle_hover();
 
-        // ---- descent rate: best available source ----
-        float descent_ms = 0;
-
-        Vector3f vel_ned;
-        const bool ekf_ok = plane.ahrs.get_velocity_NED(vel_ned);
-
-        if (ekf_ok && rngfnd_ok && alt_m < 10.0f) {
-            // Below 10m with rangefinder: blend EKF and rangefinder-derived rate.
-            // Rangefinder rate is more direct near ground, EKF is smoother.
-            const float ekf_desc = MAX(vel_ned.z, 0.0f);
-            const float rng_desc = MAX(_ahl_rngfnd_rate_filt, 0.0f);
-            // Weight rangefinder more as altitude decreases
-            const float rng_w = constrain_float(1.0f - alt_m / 10.0f, 0.2f, 0.7f);
-            descent_ms = ekf_desc * (1.0f - rng_w) + rng_desc * rng_w;
-        } else if (ekf_ok) {
-            descent_ms = MAX(vel_ned.z, 0.0f);
-        } else if (rngfnd_ok) {
-            descent_ms = MAX(_ahl_rngfnd_rate_filt, 0.0f);
-        } else {
-            descent_ms = MAX(-plane.barometer.get_climb_rate(), 0.0f);
-        }
-
-        // EMA filter on final descent rate — tau ~0.25s
-        const float alpha = constrain_float(4.0f * dt, 0.0f, 1.0f);
-        _ahl_descent_filt = _ahl_descent_filt * (1.0f - alpha) + descent_ms * alpha;
-
-        // ---- target descent rate from altitude table ----
-        const float target_ms = get_ahl_descent_rate_cms(alt_m, false) * 0.01f;
-
-        // ---- FF+P+I controller ----
-        // error > 0: descending too fast → need more throttle
-        // error < 0: too slow / ascending → need less throttle (let it descend)
-        const float error = _ahl_descent_filt - target_ms;
-
-        // Feed-forward: baseline throttle for desired descent rate
-        const float ff_out = hover - p.n_ff.get() * target_ms;
-
-        // Proportional: immediate reaction to rate error
-        const float p_out = p.n_kp.get() * error;
-
-        // Integral: eliminate steady-state error
-        // Anti-windup: freeze integration when output is saturated
-        const float thr_preview = ff_out + p_out + p.n_ki.get() * _ahl_i_sum;
-        if (thr_preview > 0.02f && thr_preview < 0.85f) {
-            _ahl_i_sum += error * dt;
-        }
-        // Clamp: positive = holding up too much, negative = pushing down for landing
-        _ahl_i_sum = constrain_float(_ahl_i_sum, -8.0f, 8.0f);
-        const float i_out = p.n_ki.get() * _ahl_i_sum;
-
-        float throttle = ff_out + p_out + i_out;
-
-        // ---- ground settle ----
-        // Aircraft ground level is ~0.2m on rangefinder (landing gear height).
-        // Latch: once we've been below 0.3m, we know we touched ground.
-        // After touch, aggressively cut throttle to prevent bounce from ground
-        // effect (prop wash creates air cushion that lifts aircraft back up).
-        const float gnd_touch_alt = plane.g2.auto_help_land.gnd_alt.get();
-        if (alt_m < gnd_touch_alt) {
+        // ---- ground contact detection ----
+        const float gnd_touch_alt = p.gnd_alt.get();
+        if (!_ahl_touched_ground && alt_m < gnd_touch_alt) {
             _ahl_touched_ground = true;
         }
 
-        if (_ahl_touched_ground) {
-            // We touched ground — keep cutting throttle even if we bounce up.
-            // Don't reset until disarm. This prevents the bounce cycle:
-            // touch → ground effect bounce → hover → touch → repeat
-            _ahl_ground_settle += dt * 0.25f;   // ~25% per second, aggressive
-            _ahl_ground_settle = MIN(_ahl_ground_settle, 0.45f);
-        } else if (alt_m < 1.0f && _ahl_descent_filt < target_ms * 0.5f) {
-            // Near ground but haven't touched yet — gentle reduction
-            _ahl_ground_settle += dt * 0.05f;
-            _ahl_ground_settle = MIN(_ahl_ground_settle, 0.15f);
-        } else {
-            // Above ground, descending normally
-            _ahl_ground_settle = MAX(_ahl_ground_settle - dt * 3.0f, 0.0f);
-        }
-        throttle -= _ahl_ground_settle;
-
-        // Clamp output
-        throttle = constrain_float(throttle, 0.0f, 0.85f);
-
-        set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
+        float throttle;
         bool should_boost = true;
         if (tailsitter.enabled() && assisted_flight) {
             should_boost = false;
         }
-        attitude_control->set_throttle_out(throttle, should_boost, 0);
+
+        if (_ahl_touched_ground) {
+            // ==== POST-LANDING: bypass controller, just cut throttle ====
+            // After ground contact the FF+P+I controller must NOT run.
+            // Frozen alt_m creates target/rate mismatch: target is tiny
+            // (low altitude) but actual descent rate is still high → the
+            // P term adds throttle, fighting ground_settle → bounce.
+            // Instead: throttle = hover − ground_settle, ramping to zero.
+            if (_ahl_ground_settle < hover * 0.7f) {
+                _ahl_ground_settle = hover * 0.7f;   // first frame: instant cut
+            }
+            _ahl_ground_settle += dt * 0.5f;          // ramp to full cutoff
+            _ahl_ground_settle = MIN(_ahl_ground_settle, hover + 0.1f);
+
+            throttle = constrain_float(hover - _ahl_ground_settle, 0.0f, 0.85f);
+
+            set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
+            attitude_control->set_throttle_out(throttle, should_boost, 0);
+        } else {
+            // ==== DESCENT: FF+P+I controller ====
+
+            // ---- descent rate: best available source ----
+            float descent_ms = 0;
+
+            Vector3f vel_ned;
+            const bool ekf_ok = plane.ahrs.get_velocity_NED(vel_ned);
+
+            if (ekf_ok && rngfnd_ok && alt_m < 10.0f) {
+                const float ekf_desc = MAX(vel_ned.z, 0.0f);
+                const float rng_desc = MAX(_ahl_rngfnd_rate_filt, 0.0f);
+                const float rng_w = constrain_float(1.0f - alt_m / 10.0f, 0.2f, 0.7f);
+                descent_ms = ekf_desc * (1.0f - rng_w) + rng_desc * rng_w;
+            } else if (ekf_ok) {
+                descent_ms = MAX(vel_ned.z, 0.0f);
+            } else if (rngfnd_ok) {
+                descent_ms = MAX(_ahl_rngfnd_rate_filt, 0.0f);
+            } else {
+                descent_ms = MAX(-plane.barometer.get_climb_rate(), 0.0f);
+            }
+
+            // EMA filter on final descent rate — tau ~0.25s
+            const float alpha = constrain_float(4.0f * dt, 0.0f, 1.0f);
+            _ahl_descent_filt = _ahl_descent_filt * (1.0f - alpha) + descent_ms * alpha;
+
+            // ---- target descent rate from altitude table ----
+            const float target_ms = get_ahl_descent_rate_cms(alt_m, false) * 0.01f;
+
+            // ---- FF+P+I controller ----
+            const float error = _ahl_descent_filt - target_ms;
+
+            const float ff_out = hover - p.n_ff.get() * target_ms;
+            const float p_out = p.n_kp.get() * error;
+
+            // Integral with anti-windup
+            const float thr_preview = ff_out + p_out + p.n_ki.get() * _ahl_i_sum;
+            if (thr_preview > 0.02f && thr_preview < 0.85f) {
+                _ahl_i_sum += error * dt;
+            }
+            _ahl_i_sum = constrain_float(_ahl_i_sum, -8.0f, 8.0f);
+            const float i_out = p.n_ki.get() * _ahl_i_sum;
+
+            throttle = ff_out + p_out + i_out;
+
+            // ---- pre-landing ground settle ----
+            if (alt_m < 1.0f && _ahl_descent_filt < target_ms * 0.5f) {
+                _ahl_ground_settle += dt * 0.05f;
+                _ahl_ground_settle = MIN(_ahl_ground_settle, 0.15f);
+            } else {
+                _ahl_ground_settle = MAX(_ahl_ground_settle - dt * 3.0f, 0.0f);
+            }
+            throttle -= _ahl_ground_settle;
+
+            throttle = constrain_float(throttle, 0.0f, 0.85f);
+
+            set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
+            attitude_control->set_throttle_out(throttle, should_boost, 0);
+        }
 
     } else if ((throttle_in <= 0) && !air_mode_active()) {
         set_desired_spool_state(AP_Motors::DesiredSpoolState::GROUND_IDLE);
