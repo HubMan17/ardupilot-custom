@@ -716,6 +716,13 @@ const AP_Param::GroupInfo AP_AutoHelpLand::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("RA_TIME", 21, AP_AutoHelpLand, ra_time, 2.0),
 
+    // @Param: RNG_OPT
+    // @DisplayName: Тип дальномера (битовая маска)
+    // @Description: Указывает какой дальномер установлен. Разные датчики ведут себя по-разному у земли. Выберите свой датчик чтобы система использовала оптимальную логику для него. Если вашего датчика нет в списке — оставьте 0, система будет работать только со статусом Good (безопасный режим по умолчанию). NRA24/TFMini: принимать данные ниже минимальной дальности (статус OutOfRangeLow), радар/лазер продолжает давать точные показания. Laser: стандартный лазерный дальномер (только Good статус).
+    // @Bitmask: 0:NRA24 (24GHz radar), 1:Laser/TFMini (лазерный), 2:Holybro H-Flow, 3:Ультразвуковой
+    // @User: Standard
+    AP_GROUPINFO("RNG_OPT", 22, AP_AutoHelpLand, rng_opt, 0),
+
     AP_GROUPEND
 };
 
@@ -1221,13 +1228,16 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
     }
 
     // ==== rangefinder handling ====
-    // Accept both Good (4) and OutOfRangeLow (2).
-    // NRA24 radar reports OutOfRangeLow below ~0.5m but still provides
-    // accurate distance readings — smooth, no jumps. Ignoring them
-    // causes the controller to fall back to noisy baro and miss ground.
     const auto rngfnd_status = plane.rangefinder.status_orient(ROTATION_PITCH_270);
+    // Bit 0 of RNG_OPT (NRA24): accept OutOfRangeLow as valid data.
+    // NRA24 radar reports OutOfRangeLow below ~0.5m but still provides
+    // accurate distance readings — smooth, no jumps. Without this,
+    // the controller falls back to noisy baro and misses ground contact.
+    // Other sensors (laser, ultrasonic) may give garbage at OutOfRangeLow,
+    // so this is only enabled when the user explicitly selects NRA24.
+    const bool accept_low = (plane.g2.auto_help_land.rng_opt.get() & 1) != 0;
     const bool rngfnd_ok = (rngfnd_status == RangeFinder::Status::Good) ||
-                           (rngfnd_status == RangeFinder::Status::OutOfRangeLow);
+                           (accept_low && rngfnd_status == RangeFinder::Status::OutOfRangeLow);
     float rngfnd_alt = 0;
 
     if (rngfnd_ok) {

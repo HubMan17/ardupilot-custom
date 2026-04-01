@@ -53,6 +53,8 @@ public:
     // Re-arm altitude: baro must be above this for RA_TIME seconds to reset landing state
     AP_Float ra_alt;    // barometer altitude to re-arm (m), default 8
     AP_Float ra_time;   // seconds baro must stay above ra_alt to re-arm, default 2
+    // Rangefinder options bitmask
+    AP_Int16 rng_opt;   // bit 0: NRA24 (accept OutOfRangeLow), bit 1: Laser/TFMini, ...
 };
 
 /*
