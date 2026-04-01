@@ -50,6 +50,9 @@ public:
     AP_Float n_hovr;    // 0 = use Q_M_THST_HOVER
     // Ground touch detection altitude (rangefinder, m)
     AP_Float gnd_alt;   // below this = touched ground, start cutting throttle
+    // Re-arm altitude: baro must be above this for RA_TIME seconds to reset landing state
+    AP_Float ra_alt;    // barometer altitude to re-arm (m), default 8
+    AP_Float ra_time;   // seconds baro must stay above ra_alt to re-arm, default 2
 };
 
 /*
@@ -638,6 +641,7 @@ private:
     bool _ahl_rngfnd_was_ok = false;      // previous rangefinder state for transition detection
     float _ahl_ground_settle = 0.0f;      // ground settle throttle reduction accumulator
     bool _ahl_touched_ground = false;     // latched true once alt < 0.3m (near rangefinder ground level)
+    uint32_t _ahl_baro_above_ms = 0;     // timestamp when baro first went above ra_alt (0 = below)
 
     // min alt for navigation in takeoff
     AP_Float takeoff_navalt_min;

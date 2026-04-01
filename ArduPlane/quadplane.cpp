@@ -698,6 +698,24 @@ const AP_Param::GroupInfo AP_AutoHelpLand::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("GND_ALT", 19, AP_AutoHelpLand, gnd_alt, 0.30),
 
+    // @Param: RA_ALT
+    // @DisplayName: Высота ре-арма посадочной логики (барометр)
+    // @Description: После касания земли (touched_ground) система блокирует газ и садит самолет. Если пилот снова взлетит без дизарма — нужно сбросить посадочную логику. Для этого барометр должен показать высоту ВЫШЕ этого значения в течение RA_TIME секунд. Барометр у земли шумит от пропвоша (±3м), поэтому порог должен быть выше максимума шума. 8м — безопасное значение. Уменьшать не рекомендуется — на земле барометр может показать 3-5м от пропвоша.
+    // @Units: m
+    // @Range: 3 30
+    // @Increment: 1
+    // @User: Advanced
+    AP_GROUPINFO("RA_ALT", 20, AP_AutoHelpLand, ra_alt, 8.0),
+
+    // @Param: RA_TIME
+    // @DisplayName: Время подтверждения ре-арма (секунды)
+    // @Description: Сколько секунд подряд барометр должен показывать высоту выше RA_ALT чтобы сбросить посадочную логику. Защита от кратковременных выбросов барометра. 2 секунды — достаточно чтобы отсеять шум, но не задерживать реальный взлет.
+    // @Units: s
+    // @Range: 0.5 10
+    // @Increment: 0.5
+    // @User: Advanced
+    AP_GROUPINFO("RA_TIME", 21, AP_AutoHelpLand, ra_time, 2.0),
+
     AP_GROUPEND
 };
 
@@ -1199,11 +1217,17 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         _ahl_rngfnd_was_ok = false;
         _ahl_ground_settle = 0;
         _ahl_touched_ground = false;
+        _ahl_baro_above_ms = 0;
     }
 
     // ==== rangefinder handling ====
-    const bool rngfnd_ok =
-        (plane.rangefinder.status_orient(ROTATION_PITCH_270) == RangeFinder::Status::Good);
+    // Accept both Good (4) and OutOfRangeLow (2).
+    // NRA24 radar reports OutOfRangeLow below ~0.5m but still provides
+    // accurate distance readings — smooth, no jumps. Ignoring them
+    // causes the controller to fall back to noisy baro and miss ground.
+    const auto rngfnd_status = plane.rangefinder.status_orient(ROTATION_PITCH_270);
+    const bool rngfnd_ok = (rngfnd_status == RangeFinder::Status::Good) ||
+                           (rngfnd_status == RangeFinder::Status::OutOfRangeLow);
     float rngfnd_alt = 0;
 
     if (rngfnd_ok) {
@@ -1258,8 +1282,9 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
     float alt_m;
     if (_ahl_touched_ground) {
         // After ground contact — freeze altitude low, ignore rangefinder.
-        // Radar gives garbage below 0.5m (256m "no target" or random values
-        // like 0.8m). Trusting it would reset ground_settle and cause bouncing.
+        // On the ground the radar may lose signal entirely (stat=3, 256m)
+        // or report unstable values. Keep alt frozen to prevent controller
+        // from reacting to noise and adding throttle.
         const float gnd_alt = plane.g2.auto_help_land.gnd_alt.get();
         alt_m = gnd_alt * 0.5f;
     } else if (rngfnd_ok) {
@@ -1271,22 +1296,34 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         alt_m = plane.barometer.get_altitude();
     }
 
-    // ---- arm/re-arm: system activates above 3m, resets landing state ----
-    // This handles: initial takeoff, re-takeoff without disarm, mode switch back
+    // ---- arm/re-arm: system activates above RA_ALT for RA_TIME seconds ----
+    // This handles: initial takeoff, re-takeoff without disarm, mode switch back.
     // Use barometer only — rangefinder is unreliable near ground and frozen
-    // after touched_ground. Barometer is always available and doesn't glitch.
+    // after touched_ground. Barometer is always available.
+    // IMPORTANT: barometer noise from prop wash can reach ±3m near ground,
+    // so RA_ALT must be well above that (default 8m) and RA_TIME adds
+    // temporal filtering to reject brief spikes.
     const float baro_alt = plane.barometer.get_altitude();
-    if (baro_alt > 3.0f) {
-        if (!_ahl_armed_flag) {
-            _ahl_armed_flag = true;
+    const float rearm_alt = plane.g2.auto_help_land.ra_alt.get();
+    const float rearm_time_ms = plane.g2.auto_help_land.ra_time.get() * 1000.0f;
+    if (baro_alt > rearm_alt) {
+        if (_ahl_baro_above_ms == 0) {
+            _ahl_baro_above_ms = now;
         }
-        // Reset landing state if we climbed back up (re-takeoff or mode switch)
-        if (_ahl_touched_ground) {
-            _ahl_touched_ground = false;
-            _ahl_ground_settle = 0;
-            _ahl_i_sum = 0;
-            _ahl_descent_filt = 0;
+        if ((now - _ahl_baro_above_ms) >= (uint32_t)rearm_time_ms) {
+            if (!_ahl_armed_flag) {
+                _ahl_armed_flag = true;
+            }
+            // Reset landing state if we climbed back up (re-takeoff or mode switch)
+            if (_ahl_touched_ground) {
+                _ahl_touched_ground = false;
+                _ahl_ground_settle = 0;
+                _ahl_i_sum = 0;
+                _ahl_descent_filt = 0;
+            }
         }
+    } else {
+        _ahl_baro_above_ms = 0;
     }
 
     const bool have_gps = AP::gps().status() >= AP_GPS::GPS_OK_FIX_2D;
