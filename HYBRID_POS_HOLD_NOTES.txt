@@ -90,6 +90,26 @@ KEY APIs USED
   AP::ahrs().get_posvelyaw_source_set()   — query current EKF source set
 
 
+REQUIRED SRC3 PARAMETERS (user must configure)
+================================================
+  EK3_SRC3_POSXY = 0    (None — flow gives velocity only, not position)
+  EK3_SRC3_VELXY = 5    (OpticalFlow)
+  EK3_SRC3_POSZ  = 1    (Baro) or 2 (Rangefinder)
+  EK3_SRC3_VELZ  = 0    (None)
+  EK3_SRC3_YAW   = 1    (Compass)
+
+Without these settings, EKF SRC3 switching will not provide flow-based hold.
+
+
+TRANSITION SMOOTHNESS NOTES
+============================
+  loiter_nav->init_target() internally calls pos_control.relax_velocity_controller_xy()
+  which decays current acceleration smoothly (POSCONTROL_RELAX_TC) and calls
+  init_xy_controller(). No separate pos_control->init_xy_controller() needed.
+  The transition from QSTAB to loiter should be smooth — pos_control picks up
+  current velocity from inertial_nav and brakes gradually, not abruptly.
+
+
 FLOW OF CONTROL
 ===============
   ModeQLoiter::update()
