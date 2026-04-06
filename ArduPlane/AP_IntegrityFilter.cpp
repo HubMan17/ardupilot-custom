@@ -1,10 +1,11 @@
 /*
-   AP_IntegrityFilter — autonomous GPS spoof & sensor degradation detection.
-   Cross-checks GPS against independent sensors:
+   AP_IntegrityFilter — echelon 2 GPS spoof & sensor degradation detection.
+   Cross-checks GPS against independent sensors (outside EKF):
      1. GPS velocity vs airspeed+heading (pitot+compass — spoofer can't fake these)
      2. GPS altitude vs barometer altitude (pressure sensor — independent)
      3. GPS velocity jitter (noise monitoring — catches degradation)
-     4. GPS vel vs EKF vel, GPS pos vs EKF pos (secondary)
+   Echelon 1 (EKF3 pre-filter) handles the same checks inside EKF at fusion rate.
+   This filter catches slow drift that leaks through the pre-filter.
    Trust score 0.0-1.0 with instant lockdown for large divergence.
 */
 
@@ -85,12 +86,11 @@ AP_IntegrityFilter::AP_IntegrityFilter()
   Returns a normalized divergence score — higher = more suspicious.
 
   Checks (in order):
-    1a. Direct speed limit: |GPS_speed - airspeed| > 20 m/s (no baseline, instant)
+    1a. Direct speed limit: |GPS_speed - airspeed| > 15 m/s (no baseline, instant)
     1b. Wind baseline shift: tracks wind vector, detects sudden changes (needs 5s warmup)
     2.  Altitude: GPS alt vs baro alt divergence (needs 5s warmup)
     3.  GPS jitter: sensor degradation (needs baseline)
-    4.  GPS vel vs EKF vel (secondary)
-    5.  GPS pos vs EKF pos (secondary)
+  Note: GPS vs EKF checks removed — not independent, now in EKF3 pre-filter.
 */
 float AP_IntegrityFilter::compute_velocity_divergence()
 {
@@ -210,24 +210,8 @@ float AP_IntegrityFilter::compute_velocity_divergence()
         _jitter_primed = true;
     }
 
-    // ---------------------------------------------------------------
-    // 4. GPS vel vs EKF vel (secondary)
-    // ---------------------------------------------------------------
-    Vector3f ekf_vel;
-    if (ahrs.get_velocity_NED(ekf_vel)) {
-        Vector2f vel_diff(gps_vel.x - ekf_vel.x, gps_vel.y - ekf_vel.y);
-        max_div = MAX(max_div, vel_diff.length());
-    }
-
-    // ---------------------------------------------------------------
-    // 5. GPS pos vs EKF pos (secondary)
-    // ---------------------------------------------------------------
-    Location gps_loc = gps.location();
-    Location ekf_loc;
-    if (ahrs.get_location(ekf_loc)) {
-        Vector2f pos_diff = gps_loc.get_distance_NE(ekf_loc);
-        max_div = MAX(max_div, pos_diff.length() * 0.1f);
-    }
+    // Checks 4 & 5 (GPS vs EKF vel/pos) removed — they are not independent
+    // from the EKF state and are now handled by the EKF3 pre-filter.
 
     return max_div;
 }

@@ -1506,6 +1506,39 @@ private:
     bool _mag_noise_override_active;
     float _mag_noise_override_value;
 
+    // GPS integrity pre-filter state (anti-spoof)
+    struct {
+        float trust;                    // 0.0-1.0, current trust in GPS measurements
+        float divergence;               // current divergence score from cross-checks
+
+        // Airspeed cross-check baseline
+        Vector2f baseline_wind;         // learned wind vector (NE, m/s)
+        bool baseline_wind_valid;
+        uint32_t baseline_wind_start_ms;
+
+        // Altitude cross-check baseline
+        float baseline_alt_diff;        // GPS-baro difference at start (m)
+        bool baseline_alt_valid;
+        uint32_t baseline_alt_start_ms;
+
+        // Jitter monitoring
+        Vector2f prev_gps_vel;          // previous GPS horizontal velocity (m/s)
+        float jitter_ema;               // EMA of sample-to-sample velocity change
+        float baseline_jitter;          // baseline jitter level
+        bool baseline_jitter_valid;
+        bool jitter_primed;
+
+        // Noise scaling output
+        float pos_noise_scale;          // multiplier for position noise (1.0 = normal)
+        float vel_noise_scale;          // multiplier for velocity noise (1.0 = normal)
+
+        // Message rate limiting
+        uint32_t last_msg_ms;
+    } _integrity;
+
+    // GPS integrity pre-filter — called before fusion in SelectVelPosFusion
+    void updateIntegrityPreFilter(void);
+
     // 1Hz update
     uint32_t last_oneHz_ms;
     void oneHzUpdate(void);

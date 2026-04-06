@@ -298,7 +298,16 @@ void NavEKF3_core::setAidingMode()
             // position pass time so the EKF health checks don't time out.
             // This prevents spurious transitions back to AID_NONE.
             if (_has_forced_position) {
-                lastPosPassTime_ms = imuSampleTime_ms;
+                if (readyToUseGPS()) {
+                    // GPS is back — clear forced-position mode.
+                    // Stop keepalive so normal GPS fusion takes over.
+                    // If DR drifted far from GPS, posTimeout will fire
+                    // naturally and ResetPosition() will snap to GPS.
+                    _has_forced_position = false;
+                    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF3 IMU%u forced-pos cleared, GPS restored", (unsigned)imu_index);
+                } else {
+                    lastPosPassTime_ms = imuSampleTime_ms;
+                }
             }
 
             // Find the minimum time without data required to trigger any check

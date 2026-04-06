@@ -680,6 +680,10 @@ void NavEKF3_core::SelectVelPosFusion()
         }
     }
 
+    // GPS integrity pre-filter: cross-check GPS against independent sensors
+    // before fusion to prevent EKF state contamination from spoofing
+    updateIntegrityPreFilter();
+
     // perform fusion
     if (fuseVelData || fusePosData || fuseHgtData) {
         FuseVelPosNED();
@@ -761,6 +765,19 @@ void NavEKF3_core::FuseVelPosNED()
                 R_OBS[3] = sq(constrain_ftype(frontend->_gpsHorizPosNoise, 0.1f, 10.0f)) + sq(posErr);
             }
             R_OBS[4] = R_OBS[3];
+
+            // Apply GPS integrity pre-filter noise scaling (anti-spoof)
+            // trust=1.0 → scale=1.0, trust=0.5 → scale=2.0, trust=0.1 → scale=10.0
+            if (_integrity.vel_noise_scale > 1.0f) {
+                R_OBS[0] *= sq(_integrity.vel_noise_scale);
+                R_OBS[1] *= sq(_integrity.vel_noise_scale);
+                R_OBS[2] *= sq(_integrity.vel_noise_scale);
+            }
+            if (_integrity.pos_noise_scale > 1.0f) {
+                R_OBS[3] *= sq(_integrity.pos_noise_scale);
+                R_OBS[4] *= sq(_integrity.pos_noise_scale);
+            }
+
             // For data integrity checks we use the same measurement variances as used to calculate the Kalman gains for all measurements except GPS horizontal velocity
             // For horizontal GPS velocity we don't want the acceptance radius to increase with reported GPS accuracy so we use a value based on best GPS performance
             // plus a margin for manoeuvres. It is better to reject GPS horizontal velocity errors early

@@ -241,6 +241,10 @@ void NavEKF3_core::InitialiseVariables()
     lastKnownPositionNE.zero();
     lastKnownPositionD = 0;
     _has_forced_position = false;
+    _integrity = {};
+    _integrity.trust = 1.0f;
+    _integrity.pos_noise_scale = 1.0f;
+    _integrity.vel_noise_scale = 1.0f;
     prevTnb.zero();
     memset(&P[0][0], 0, sizeof(P));
     memset(&KH[0][0], 0, sizeof(KH));
