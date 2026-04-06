@@ -1228,6 +1228,7 @@ public:
     // Anti-spoof emergency override state
     bool _spoof_override_active;
     uint32_t _spoof_engage_ms;  // timestamp of engage for minimum lockdown time
+    Mode *_pre_spoof_mode = nullptr;  // saved mode for auto-restore after recovery
     void engage_spoof_emergency();
     void disengage_spoof_emergency();
 

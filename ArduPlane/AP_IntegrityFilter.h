@@ -42,7 +42,7 @@ public:
 private:
     // Parameters
     AP_Int8  _enable;
-    AP_Float _vel_thresh;     // velocity divergence threshold (m/s)
+    AP_Float _vel_thresh;     // divergence threshold
     AP_Float _decay_rate;     // trust decay per second when divergent
     AP_Float _recover_rate;   // trust recovery per second when convergent
     AP_Float _caution_thresh; // trust threshold for CAUTION
@@ -58,17 +58,43 @@ private:
     float _last_divergence = 0.0f;
     float _recovery_divergence = 0.0f;
     uint32_t _arm_time_ms = 0;
-    uint32_t _recovery_good_since_ms = 0;  // timestamp when recovery divergence first went low
+    uint32_t _recovery_good_since_ms = 0;
 
-    // Clean GPS snapshot ring buffer (last known good positions)
+    // Clean GPS snapshot ring buffer
     static constexpr uint8_t SNAPSHOT_SIZE = 10;
     Snapshot _snapshots[SNAPSHOT_SIZE];
     uint8_t _snapshot_idx = 0;
     uint32_t _last_snapshot_ms = 0;
 
+    // Airspeed cross-check: baseline wind vector (GPS_vel - airspeed*heading)
+    Vector2f _baseline_wind;
+    bool _baseline_wind_valid = false;
+    uint32_t _baseline_wind_start_ms = 0;  // when baseline was first set
+
+    // Altitude cross-check: baseline GPS-baro altitude difference
+    float _baseline_alt_diff = 0.0f;
+    bool _baseline_alt_valid = false;
+    uint32_t _baseline_alt_start_ms = 0;
+
+    // GPS velocity jitter monitoring (sensor degradation)
+    Vector2f _prev_gps_vel_detect;
+    float _gps_jitter = 0.0f;
+    float _baseline_gps_jitter = 0.0f;
+    bool _baseline_jitter_valid = false;
+    bool _jitter_primed = false;
+
+    // Instant lockdown: high-divergence sustained timer
+    uint32_t _high_div_since_ms = 0;
+
+    // Recovery delta-comparison state
+    Vector3f _prev_gps_vel;
+    Vector3f _prev_ahrs_vel;
+    uint32_t _prev_recovery_ms = 0;
+    float _last_recovery_result = 99.0f;
+
     // Methods
-    float compute_velocity_divergence() const;
-    float compute_recovery_divergence() const;
+    float compute_velocity_divergence();
+    float compute_recovery_divergence();
     Level compute_level(float trust) const;
     void execute_level_change(Level new_level, Level old_level);
     void update_snapshots();

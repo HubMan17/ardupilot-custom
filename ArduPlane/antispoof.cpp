@@ -56,9 +56,10 @@ void Plane::engage_spoof_emergency()
         GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "ANTI-SPOOF: no clean snapshot, reset to current loc");
     }
 
-    // 7. Switch to FBWA — safe manual mode without GPS dependency
+    // 7. Save current mode and switch to FBWA
+    _pre_spoof_mode = control_mode;
     set_mode(mode_fbwa, ModeReason::EMERGENCY_OVERRIDE);
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: mode FBWA");
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: mode FBWA (was %s)", _pre_spoof_mode->name());
 
     _spoof_override_active = true;
     _spoof_engage_ms = AP_HAL::millis();
@@ -105,7 +106,12 @@ void Plane::disengage_spoof_emergency()
     // 5. Clear mag noise override
     AP::ahrs().EKF3.clearMagNoiseOverride();
 
-    // 6. Do NOT auto-restore flight mode — pilot decides
+    // 6. Restore previous flight mode
+    if (_pre_spoof_mode != nullptr) {
+        set_mode(*_pre_spoof_mode, ModeReason::EMERGENCY_OVERRIDE);
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: restored mode %s", _pre_spoof_mode->name());
+        _pre_spoof_mode = nullptr;
+    }
 
     _spoof_override_active = false;
 }

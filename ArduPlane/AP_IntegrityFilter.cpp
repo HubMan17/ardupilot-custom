@@ -1,13 +1,19 @@
 /*
-   AP_IntegrityFilter — autonomous GPS spoof detection via velocity cross-check.
-   Compares GPS velocity against EKF (IMU-fused) velocity.
-   Trust score 0.0-1.0 with escalating response levels.
+   AP_IntegrityFilter — autonomous GPS spoof & sensor degradation detection.
+   Cross-checks GPS against independent sensors:
+     1. GPS velocity vs airspeed+heading (pitot+compass — spoofer can't fake these)
+     2. GPS altitude vs barometer altitude (pressure sensor — independent)
+     3. GPS velocity jitter (noise monitoring — catches degradation)
+     4. GPS vel vs EKF vel, GPS pos vs EKF pos (secondary)
+   Trust score 0.0-1.0 with instant lockdown for large divergence.
 */
 
 #include "Plane.h"
 #include "AP_IntegrityFilter.h"
 #include <AP_GPS/AP_GPS.h>
 #include <AP_AHRS/AP_AHRS.h>
+#include <AP_Airspeed/AP_Airspeed.h>
+#include <AP_Baro/AP_Baro.h>
 #include <AP_HAL/AP_HAL.h>
 #include <GCS_MAVLink/GCS.h>
 
@@ -17,22 +23,21 @@ const AP_Param::GroupInfo AP_IntegrityFilter::var_info[] = {
 
     // @Param: ENABLE
     // @DisplayName: Integrity filter enable
-    // @Description: Enable GPS integrity velocity cross-check filter
+    // @Description: Enable GPS integrity cross-check filter
     // @Values: 0:Disabled,1:Enabled
     // @User: Standard
     AP_GROUPINFO("ENABLE", 1, AP_IntegrityFilter, _enable, 0),
 
     // @Param: VEL_THR
-    // @DisplayName: Velocity divergence threshold
-    // @Description: GPS vs EKF horizontal velocity difference threshold to start trust decay (m/s)
+    // @DisplayName: Divergence threshold
+    // @Description: Normalized divergence threshold to start trust decay
     // @Range: 1.0 10.0
-    // @Units: m/s
     // @User: Advanced
     AP_GROUPINFO("VEL_THR", 2, AP_IntegrityFilter, _vel_thresh, 3.0f),
 
     // @Param: DECAY
     // @DisplayName: Trust decay rate
-    // @Description: Trust score decrease per second when velocity divergence exceeds threshold
+    // @Description: Trust score decrease per second when divergence exceeds threshold
     // @Range: 0.01 1.0
     // @Units: 1/s
     // @User: Advanced
@@ -40,7 +45,7 @@ const AP_Param::GroupInfo AP_IntegrityFilter::var_info[] = {
 
     // @Param: RECOVER
     // @DisplayName: Trust recovery rate
-    // @Description: Trust score increase per second when velocity agrees
+    // @Description: Trust score increase per second when sensors agree
     // @Range: 0.005 0.5
     // @Units: 1/s
     // @User: Advanced
@@ -75,83 +80,215 @@ AP_IntegrityFilter::AP_IntegrityFilter()
     AP_Param::setup_object_defaults(this, var_info);
 }
 
-float AP_IntegrityFilter::compute_velocity_divergence() const
+/*
+  Primary spoof & degradation detection.
+  Returns a normalized divergence score — higher = more suspicious.
+
+  Checks (in order):
+    1a. Direct speed limit: |GPS_speed - airspeed| > 20 m/s (no baseline, instant)
+    1b. Wind baseline shift: tracks wind vector, detects sudden changes (needs 5s warmup)
+    2.  Altitude: GPS alt vs baro alt divergence (needs 5s warmup)
+    3.  GPS jitter: sensor degradation (needs baseline)
+    4.  GPS vel vs EKF vel (secondary)
+    5.  GPS pos vs EKF pos (secondary)
+*/
+float AP_IntegrityFilter::compute_velocity_divergence()
 {
     const auto &gps = AP::gps();
     const auto &ahrs = AP::ahrs();
+    const uint32_t now = AP_HAL::millis();
 
-    // need at least 3D fix
     if (gps.status() < AP_GPS::GPS_OK_FIX_3D) {
         return 0.0f;
     }
 
     float max_div = 0.0f;
-
-    // 1. Velocity cross-check: GPS velocity vs EKF velocity
     const Vector3f &gps_vel = gps.velocity();
+
+    // ---------------------------------------------------------------
+    // 1. AIRSPEED CROSS-CHECKS
+    //    1a: Direct speed limit — no baseline, works immediately
+    //    1b: Wind baseline shift — sensitive, needs 5s warmup
+    // ---------------------------------------------------------------
+    auto *arspd = AP::airspeed();
+    if (arspd && arspd->healthy()) {
+        float airspeed = arspd->get_airspeed();
+
+        // 1a. DIRECT SPEED LIMIT (no baseline needed, always active)
+        //     |GPS_groundspeed - airspeed| should be bounded by wind speed.
+        //     Max realistic wind: ~20 m/s. Beyond that = spoofing.
+        if (airspeed > 8.0f) {
+            float speed_diff = fabsf(gps.ground_speed() - airspeed);
+            if (speed_diff > 15.0f) {
+                // 20 m/s diff → div = 2.5, 30 m/s → div = 7.5 (instant lockdown)
+                max_div = MAX(max_div, (speed_diff - 15.0f) * 0.5f);
+            }
+        }
+
+        // 1b. WIND BASELINE SHIFT (sensitive detection, needs warmup)
+        //     Only in stable cruise (airspeed > 12 m/s, past transition)
+        if (airspeed > 12.0f) {
+            float heading = ahrs.get_yaw();
+            Vector2f expected_vel(airspeed * cosf(heading), airspeed * sinf(heading));
+            Vector2f gps_vel_h(gps_vel.x, gps_vel.y);
+            Vector2f wind = gps_vel_h - expected_vel;
+
+            // Build baseline — use trust > 0.7 (not 0.9) so it can self-correct
+            if (_trust > 0.7f && _baseline_wind_valid) {
+                float ema = (now - _baseline_wind_start_ms < 10000) ? 0.15f : 0.03f;
+                _baseline_wind = _baseline_wind * (1.0f - ema) + wind * ema;
+            } else if (_trust > 0.7f && !_baseline_wind_valid) {
+                _baseline_wind = wind;
+                _baseline_wind_valid = true;
+                _baseline_wind_start_ms = now;
+            }
+
+            // Only use after 5s of baseline building
+            if (_baseline_wind_valid && (now - _baseline_wind_start_ms > 5000)) {
+                Vector2f wind_shift = wind - _baseline_wind;
+                float shift_mag = wind_shift.length();
+                // 6 m/s shift → div = 3.0 (at threshold)
+                max_div = MAX(max_div, shift_mag * 0.5f);
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 2. ALTITUDE CROSS-CHECK: GPS altitude vs barometer altitude
+    //    Barometer measures pressure — spoofer can't fake it.
+    // ---------------------------------------------------------------
+    {
+        float baro_alt = AP::baro().get_altitude();
+        const Location &home = AP::ahrs().get_home();
+        float gps_alt_rel = (gps.location().alt - home.alt) * 0.01f;
+        float alt_diff = gps_alt_rel - baro_alt;
+
+        if (_trust > 0.7f && _baseline_alt_valid) {
+            float ema = (now - _baseline_alt_start_ms < 10000) ? 0.15f : 0.03f;
+            _baseline_alt_diff = _baseline_alt_diff * (1.0f - ema) + alt_diff * ema;
+        } else if (_trust > 0.7f && !_baseline_alt_valid) {
+            _baseline_alt_diff = alt_diff;
+            _baseline_alt_valid = true;
+            _baseline_alt_start_ms = now;
+        }
+
+        // Use after 5s of baseline
+        if (_baseline_alt_valid && (now - _baseline_alt_start_ms > 5000)) {
+            float alt_shift = fabsf(alt_diff - _baseline_alt_diff);
+            // 30m shift → div = 3.0, 60m → div = 6.0 (instant lockdown)
+            max_div = MAX(max_div, alt_shift * 0.1f);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 3. GPS VELOCITY JITTER: sensor degradation detection
+    //    Track sample-to-sample velocity changes.
+    //    3× baseline jitter → contributes to divergence.
+    // ---------------------------------------------------------------
+    {
+        Vector2f gps_vel_h(gps_vel.x, gps_vel.y);
+        if (_jitter_primed) {
+            Vector2f delta = gps_vel_h - _prev_gps_vel_detect;
+            float jitter = delta.length();
+            _gps_jitter = _gps_jitter * 0.9f + jitter * 0.1f;
+
+            if (_trust > 0.7f && _baseline_jitter_valid) {
+                _baseline_gps_jitter = _baseline_gps_jitter * 0.99f + _gps_jitter * 0.01f;
+            } else if (_trust > 0.7f && _gps_jitter > 0.01f && !_baseline_jitter_valid) {
+                _baseline_gps_jitter = _gps_jitter;
+                _baseline_jitter_valid = true;
+            }
+
+            if (_baseline_jitter_valid && _baseline_gps_jitter > 0.01f) {
+                float jitter_ratio = _gps_jitter / _baseline_gps_jitter;
+                if (jitter_ratio > 3.0f) {
+                    max_div = MAX(max_div, (jitter_ratio - 2.0f) * 1.5f);
+                }
+            }
+        }
+        _prev_gps_vel_detect = gps_vel_h;
+        _jitter_primed = true;
+    }
+
+    // ---------------------------------------------------------------
+    // 4. GPS vel vs EKF vel (secondary)
+    // ---------------------------------------------------------------
     Vector3f ekf_vel;
     if (ahrs.get_velocity_NED(ekf_vel)) {
         Vector2f vel_diff(gps_vel.x - ekf_vel.x, gps_vel.y - ekf_vel.y);
         max_div = MAX(max_div, vel_diff.length());
     }
 
-    // 2. Position cross-check: GPS position vs EKF position
-    //    Convert both to NE offset from home, compare distance
+    // ---------------------------------------------------------------
+    // 5. GPS pos vs EKF pos (secondary)
+    // ---------------------------------------------------------------
     Location gps_loc = gps.location();
     Location ekf_loc;
     if (ahrs.get_location(ekf_loc)) {
         Vector2f pos_diff = gps_loc.get_distance_NE(ekf_loc);
-        float pos_div_m = pos_diff.length();
-        // scale position divergence to equivalent velocity metric
-        // 50m offset → equivalent to 5 m/s velocity divergence
-        max_div = MAX(max_div, pos_div_m * 0.1f);
-    }
-
-    // 3. EKF health check — if EKF is unhealthy, treat as divergence
-    if (!ahrs.healthy()) {
-        max_div = MAX(max_div, _vel_thresh + 1.0f);
+        max_div = MAX(max_div, pos_diff.length() * 0.1f);
     }
 
     return max_div;
 }
 
 /*
-  Compare raw GPS velocity (bypasses force_disable) against AHRS velocity.
-  Used during lockdown to detect when GPS becomes clean again.
-  GPS velocity() accessor is NOT masked by force_disable.
+  Recovery divergence: compare velocity CHANGES (deltas) between GPS and AHRS
+  over 1-second windows. In DR mode, absolute velocities drift apart, but
+  velocity *changes* (accelerations) still agree because IMU bias is slow.
 */
-float AP_IntegrityFilter::compute_recovery_divergence() const
+float AP_IntegrityFilter::compute_recovery_divergence()
 {
     const auto &gps = AP::gps();
     const auto &ahrs = AP::ahrs();
 
-    // GPS backend still provides velocity even when force-disabled,
-    // but we need valid data — check ground_speed > 0 as sanity
     const Vector3f &gps_vel = gps.velocity();
     if (gps_vel.length() < 0.01f && gps.ground_speed() < 0.01f) {
-        // no valid GPS data at all
+        _prev_recovery_ms = 0;
         return 99.0f;
     }
 
-    Vector3f ekf_vel;
-    if (!ahrs.get_velocity_NED(ekf_vel)) {
+    Vector3f ahrs_vel;
+    if (!ahrs.get_velocity_NED(ahrs_vel)) {
+        _prev_recovery_ms = 0;
         return 99.0f;
     }
 
-    Vector2f vel_diff(gps_vel.x - ekf_vel.x, gps_vel.y - ekf_vel.y);
-    return vel_diff.length();
+    const uint32_t now = AP_HAL::millis();
+
+    if (_prev_recovery_ms == 0 || (now - _prev_recovery_ms) > 2000) {
+        _prev_gps_vel = gps_vel;
+        _prev_ahrs_vel = ahrs_vel;
+        _prev_recovery_ms = now;
+        return _last_recovery_result;
+    }
+
+    float dt = (now - _prev_recovery_ms) * 0.001f;
+    if (dt < 0.8f) {
+        return _last_recovery_result;
+    }
+
+    Vector2f delta_gps(gps_vel.x - _prev_gps_vel.x, gps_vel.y - _prev_gps_vel.y);
+    Vector2f delta_ahrs(ahrs_vel.x - _prev_ahrs_vel.x, ahrs_vel.y - _prev_ahrs_vel.y);
+
+    _prev_gps_vel = gps_vel;
+    _prev_ahrs_vel = ahrs_vel;
+    _prev_recovery_ms = now;
+
+    Vector2f accel_diff = delta_gps - delta_ahrs;
+    _last_recovery_result = accel_diff.length() / dt;
+    return _last_recovery_result;
 }
 
 void AP_IntegrityFilter::update_snapshots()
 {
     const uint32_t now = AP_HAL::millis();
 
-    // save snapshots at 1Hz when trust is high
     if (now - _last_snapshot_ms < 1000) {
         return;
     }
     if (_trust < 0.8f) {
-        return;  // don't save dirty positions
+        return;
     }
 
     const auto &gps = AP::gps();
@@ -174,7 +311,6 @@ void AP_IntegrityFilter::update_snapshots()
 
 bool AP_IntegrityFilter::get_clean_snapshot(Snapshot &snap) const
 {
-    // search backwards from most recent for trust > 0.8
     for (uint8_t i = 0; i < SNAPSHOT_SIZE; i++) {
         uint8_t idx = (_snapshot_idx + SNAPSHOT_SIZE - 1 - i) % SNAPSHOT_SIZE;
         const Snapshot &s = _snapshots[idx];
@@ -206,7 +342,7 @@ void AP_IntegrityFilter::execute_level_change(Level new_level, Level old_level)
     if (new_level > old_level) {
         switch (new_level) {
         case Level::CAUTION:
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "INTEG: CAUTION trust=%.0f%% div=%.1fm/s",
+            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "INTEG: CAUTION trust=%.0f%% div=%.1f",
                 _trust * 100.0f, _last_divergence);
             break;
 
@@ -214,12 +350,14 @@ void AP_IntegrityFilter::execute_level_change(Level new_level, Level old_level)
             GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "INTEG: WARNING — GPS DISABLED trust=%.0f%%",
                 _trust * 100.0f);
             AP::gps().force_disable(true);
+            _prev_recovery_ms = 0;
             break;
 
         case Level::EMERGENCY:
             GCS_SEND_TEXT(MAV_SEVERITY_EMERGENCY, "INTEG: EMERGENCY — FULL LOCKDOWN trust=%.0f%%",
                 _trust * 100.0f);
             plane.engage_spoof_emergency();
+            _prev_recovery_ms = 0;
             break;
 
         case Level::NOMINAL:
@@ -271,14 +409,21 @@ void AP_IntegrityFilter::update()
         _level = Level::NOMINAL;
         _pending_level = Level::NOMINAL;
         _arm_time_ms = 0;
+        _baseline_wind_valid = false;
+        _baseline_wind_start_ms = 0;
+        _baseline_alt_valid = false;
+        _baseline_alt_start_ms = 0;
+        _baseline_jitter_valid = false;
+        _jitter_primed = false;
+        _high_div_since_ms = 0;
         return;
     }
 
-    // record arm time, skip first 30s to let EKF settle
+    // record arm time, skip first 10s to let EKF settle
     if (_arm_time_ms == 0) {
         _arm_time_ms = now;
     }
-    if (now - _arm_time_ms < 30000) {
+    if (now - _arm_time_ms < 10000) {
         return;
     }
 
@@ -292,48 +437,63 @@ void AP_IntegrityFilter::update()
 
     // compute divergence — different methods for normal vs lockdown
     if (_level >= Level::WARNING) {
-        // In WARNING/EMERGENCY: GPS is force-disabled, normal divergence returns 0.
-        // Use raw GPS velocity (bypasses force_disable) vs AHRS DR velocity.
-        _last_divergence = 0.0f;  // normal divergence not meaningful
+        _last_divergence = 0.0f;
         _recovery_divergence = compute_recovery_divergence();
 
-        // Recovery logic: if raw GPS velocity matches DR velocity for 10+ seconds
         if (_recovery_divergence < _vel_thresh) {
             if (_recovery_good_since_ms == 0) {
                 _recovery_good_since_ms = now;
             }
-            // require 10 seconds of consistent agreement before trust recovery
             if (now - _recovery_good_since_ms > 10000) {
                 _trust += _recover_rate * dt;
             }
         } else {
             _recovery_good_since_ms = 0;
-            // GPS still bad — slow decay continues
             _trust -= _decay_rate * 0.1f * dt;
         }
     } else {
-        // Normal mode: compare GPS vs EKF
+        // Normal mode: cross-check GPS vs independent sensors
         _last_divergence = compute_velocity_divergence();
         _recovery_divergence = 0.0f;
         _recovery_good_since_ms = 0;
 
         if (_last_divergence > _vel_thresh) {
-            _trust -= _decay_rate * dt;
+            // scale decay by divergence magnitude
+            float decay_mult = _last_divergence / _vel_thresh;
+            _trust -= _decay_rate * decay_mult * dt;
         } else {
             _trust += _recover_rate * dt;
+            _high_div_since_ms = 0;
+        }
+
+        // INSTANT LOCKDOWN: div > 2× threshold sustained > 1s → straight to EMERGENCY
+        if (_last_divergence > _vel_thresh * 2.0f) {
+            if (_high_div_since_ms == 0) {
+                _high_div_since_ms = now;
+            } else if (now - _high_div_since_ms > 1000 && _level < Level::EMERGENCY) {
+                GCS_SEND_TEXT(MAV_SEVERITY_EMERGENCY,
+                    "INTEG: INSTANT LOCKDOWN div=%.1f (>%.1f for >1s)",
+                    _last_divergence, _vel_thresh * 2.0f);
+                _trust = 0.0f;
+                execute_level_change(Level::EMERGENCY, _level);
+                _level = Level::EMERGENCY;
+                _pending_level = Level::EMERGENCY;
+            }
+        } else {
+            _high_div_since_ms = 0;
         }
     }
     _trust = constrain_float(_trust, 0.0f, 1.0f);
 
-    // determine target level
+    // determine target level (for gradual escalation path)
     Level target = compute_level(_trust);
 
-    // hysteresis: require level to be sustained for 2 seconds
+    // hysteresis: require level to be sustained for 1 second
     if (target != _level) {
         if (target != _pending_level) {
             _pending_level = target;
             _pending_level_start_ms = now;
-        } else if (now - _pending_level_start_ms > 2000) {
+        } else if (now - _pending_level_start_ms > 1000) {
             execute_level_change(target, _level);
             _level = target;
         }
