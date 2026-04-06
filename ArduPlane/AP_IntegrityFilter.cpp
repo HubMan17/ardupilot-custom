@@ -250,9 +250,10 @@ void AP_IntegrityFilter::update()
         _pending_level = _level;
     }
 
-    // periodic status every 5 seconds (always when enabled, for debugging)
+    // periodic status: 5s at NOMINAL/CAUTION, 30s at WARNING/EMERGENCY to reduce GCS flood
     static uint32_t last_status_ms;
-    if (now - last_status_ms > 5000) {
+    const uint32_t status_interval = (_level >= Level::WARNING) ? 30000 : 5000;
+    if (now - last_status_ms > status_interval) {
         last_status_ms = now;
         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "INTEG: trust=%.0f%% div=%.1f lvl=%u",
             _trust * 100.0f, _last_divergence, (unsigned)_level);

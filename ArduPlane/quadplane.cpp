@@ -2069,6 +2069,16 @@ void SLT_Transition::update()
         transition_start_ms = now;
     }
 
+    // Anti-spoof: suppress transition logic during lockdown — EKF airspeed
+    // estimate is garbage without GPS (shows 500+ m/s)
+    if (plane._spoof_override_active) {
+        // force VTOL hold, do not advance transition state
+        quadplane.assisted_flight = true;
+        quadplane.hold_hover(0);
+        transition_state = TRANSITION_AIRSPEED_WAIT;
+        return;
+    }
+
     float aspeed;
     bool have_airspeed = quadplane.ahrs.airspeed_estimate(aspeed);
 
@@ -5094,6 +5104,10 @@ bool QuadPlane::abort_landing(void)
  */
 bool QuadPlane::should_disable_TECS() const
 {
+    // Anti-spoof: disable TECS during lockdown — EKF velocity is garbage without GPS
+    if (plane._spoof_override_active) {
+        return true;
+    }
     if (in_vtol_land_descent()) {
         return true;
     }
