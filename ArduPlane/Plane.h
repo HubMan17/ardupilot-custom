@@ -1227,6 +1227,7 @@ private:
 public:
     // Anti-spoof emergency override state
     bool _spoof_override_active;
+    uint32_t _spoof_engage_ms;  // timestamp of engage for minimum lockdown time
     void engage_spoof_emergency();
     void disengage_spoof_emergency();
 

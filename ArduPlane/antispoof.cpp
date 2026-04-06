@@ -61,6 +61,7 @@ void Plane::engage_spoof_emergency()
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: mode FBWA");
 
     _spoof_override_active = true;
+    _spoof_engage_ms = AP_HAL::millis();
 }
 
 void Plane::disengage_spoof_emergency()
@@ -69,7 +70,16 @@ void Plane::disengage_spoof_emergency()
         return;
     }
 
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: DISENGAGED");
+    // minimum lockdown time 5 seconds to prevent instant disengage from RC bounce
+    const uint32_t lockdown_time = AP_HAL::millis() - _spoof_engage_ms;
+    if (lockdown_time < 5000) {
+        GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "ANTI-SPOOF: disengage blocked, lockdown %us",
+            (unsigned)(lockdown_time / 1000));
+        return;
+    }
+
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: DISENGAGED after %us",
+        (unsigned)(lockdown_time / 1000));
 
     // 1. Switch EKF back to SRC1 (GPS) before re-enabling GPS
     AP::ahrs().EKF3.setPosVelYawSourceSet(0);
