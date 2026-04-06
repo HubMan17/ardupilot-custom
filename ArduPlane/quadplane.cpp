@@ -1219,15 +1219,17 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
             if (!_ahl_loiter_active) {
                 loiter_nav->init_target();
                 _ahl_loiter_active = true;
-                // Без GPS → переключить EKF на SRC3 (flow+rangefinder)
-                if (!have_gps_now) {
-                    _ahl_prev_ekf_src = AP::ahrs().get_posvelyaw_source_set();
-                    AP::ahrs().set_posvelyaw_source_set(2);
-                }
+            }
+            // Без GPS → переключить EKF на SRC3 (каждый кадр, ловит потерю GPS в loiter)
+            if (!have_gps_now && AP::ahrs().get_posvelyaw_source_set() != 2) {
+                _ahl_prev_ekf_src = AP::ahrs().get_posvelyaw_source_set();
+                AP::ahrs().set_posvelyaw_source_set(2);
+                loiter_nav->init_target();  // re-init на новом EKF source
             }
             // GPS вернулся → вернуть EKF на исходный source
             if (have_gps_now && AP::ahrs().get_posvelyaw_source_set() == 2) {
                 AP::ahrs().set_posvelyaw_source_set(_ahl_prev_ekf_src);
+                loiter_nav->init_target();  // re-init на GPS source
             }
             loiter_nav->clear_pilot_desired_acceleration();
             loiter_nav->update();
