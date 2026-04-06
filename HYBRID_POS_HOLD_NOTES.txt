@@ -1,0 +1,107 @@
+================================================================================
+ HYBRID QLOITER POSITION HOLD — ARCHITECTURE NOTES
+ Branch: custom-v2.0-pos-hold
+================================================================================
+
+WHAT THIS IS
+============
+To the existing custom descent controller (FF+P+I / GPS Z-controller) we added
+hybrid horizontal position hold:
+- Right stick deflected  -> direct QSTAB-like attitude control (responsive)
+- Right stick released   -> loiter_nav captures position and holds it
+- Custom descent         -> always active, independent of stick state
+
+
+EKF SOURCE SWITCHING
+====================
+With GPS:
+  SRC1 always. loiter_nav holds position via GPS.
+
+Without GPS, stick released:
+  EKF switches to SRC3 (optical flow + rangefinder). loiter_nav holds via flow.
+
+Without GPS, stick touched:
+  SRC3 stays active (flow needed for EKF). Attitude is direct QSTAB.
+
+Exit QLoiter (any other mode):
+  EKF forcibly restored to SRC1 via _exit().
+
+GPS returns:
+  EKF automatically restored to SRC1.
+
+
+STICK DEADZONE
+==============
+norm(roll_in, pitch_in) < 100 out of [-4500, 4500] range (~2.2%).
+Stick is spring-centered, so this threshold is sufficient.
+
+
+FILES CHANGED
+=============
+
+ArduPlane/quadplane.h
+---------------------
+  ~line 647-648: added state variables
+    bool _ahl_loiter_active    — true when loiter position hold is engaged
+    uint8_t _ahl_prev_ekf_src  — EKF source set index before SRC3 switch
+
+ArduPlane/mode.h
+----------------
+  Class ModeQLoiter (~line 609): added void _exit() override
+
+ArduPlane/mode_qloiter.cpp
+--------------------------
+  _enter():
+    - loiter_nav->init_target()  — pre-init loiter at current position
+    - quadplane._ahl_loiter_active = false
+
+  _exit() [NEW]:
+    - If EKF is on SRC3, restore to _ahl_prev_ekf_src
+    - Reset _ahl_loiter_active
+
+ArduPlane/quadplane.cpp
+-----------------------
+  hold_auto_help_land() — attitude block (~line 1208-1245):
+    REPLACED single multicopter_attitude_rate_update() call with hybrid block:
+
+    1. Read channel_roll / channel_pitch, compute norm() of deflection
+    2. If stick_norm < 100 (centered):
+       - First frame: loiter_nav->init_target(), set _ahl_loiter_active
+       - If no GPS: save EKF source, switch to SRC3
+       - Every frame: loiter_nav->update(), feed roll/pitch to attitude_control
+       - If GPS returned: restore EKF source
+    3. If stick_norm >= 100 (deflected):
+       - Set _ahl_loiter_active = false
+       - Call multicopter_attitude_rate_update() (QSTAB direct control)
+       - SRC3 stays if no GPS
+
+  Disarm block (~line 1264-1268):
+    - Restore EKF source if on SRC3
+    - Reset _ahl_loiter_active and _ahl_prev_ekf_src
+
+
+KEY APIs USED
+=============
+  loiter_nav->init_target()           — capture current position as hold point
+  loiter_nav->clear_pilot_desired_acceleration() — zero pilot input (pure hold)
+  loiter_nav->update()                — run XY position controller
+  loiter_nav->get_roll() / get_pitch() — attitude output from loiter
+  AP::ahrs().set_posvelyaw_source_set(2)  — switch EKF to SRC3
+  AP::ahrs().get_posvelyaw_source_set()   — query current EKF source set
+
+
+FLOW OF CONTROL
+===============
+  ModeQLoiter::update()
+    -> mode_qstabilize.update()        [sets plane.nav_roll_cd/nav_pitch_cd]
+
+  ModeQLoiter::run()
+    -> quadplane.hold_auto_help_land(throttle)
+        -> hybrid attitude block:
+            sticks centered?  -> loiter_nav path (position hold)
+            sticks deflected? -> multicopter_attitude_rate_update (QSTAB)
+        -> rangefinder handling
+        -> altitude estimate
+        -> arm/re-arm logic
+        -> GPS branch:   Z-controller with A_LAND_G_RT* rate table
+        -> No-GPS branch: FF+P+I descent controller
