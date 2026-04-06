@@ -644,6 +644,8 @@ private:
     float _ahl_ground_settle = 0.0f;      // ground settle throttle reduction accumulator
     bool _ahl_touched_ground = false;     // latched true once alt < 0.3m (near rangefinder ground level)
     uint32_t _ahl_baro_above_ms = 0;     // timestamp when baro first went above ra_alt (0 = below)
+    bool _ahl_loiter_active = false;     // hybrid loiter position hold engaged
+    uint8_t _ahl_prev_ekf_src = 0;      // EKF source set before SRC3 switch
 
     // min alt for navigation in takeoff
     AP_Float takeoff_navalt_min;

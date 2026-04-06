@@ -1205,8 +1205,44 @@ void QuadPlane::hold_stabilize(float throttle_in)
  */
 void QuadPlane::hold_auto_help_land(float throttle_in)
 {
-    // ---- attitude ----
-    multicopter_attitude_rate_update(get_desired_yaw_rate_cds(false));
+    // ---- hybrid attitude: QSTAB direct control OR loiter position hold ----
+    {
+        const float yaw_rate_cds = get_desired_yaw_rate_cds(false);
+        const int16_t roll_in = plane.channel_roll->get_control_in();
+        const int16_t pitch_in = plane.channel_pitch->get_control_in();
+        const float stick_norm = norm((float)roll_in, (float)pitch_in);
+        const bool sticks_centered = (stick_norm < 100.0f);
+        const bool have_gps_now = AP::gps().status() >= AP_GPS::GPS_OK_FIX_2D;
+
+        if (sticks_centered) {
+            // --- LOITER HOLD: стик отпущен → удержание позиции ---
+            if (!_ahl_loiter_active) {
+                loiter_nav->init_target();
+                _ahl_loiter_active = true;
+                // Без GPS → переключить EKF на SRC3 (flow+rangefinder)
+                if (!have_gps_now) {
+                    _ahl_prev_ekf_src = AP::ahrs().get_posvelyaw_source_set();
+                    AP::ahrs().set_posvelyaw_source_set(2);
+                }
+            }
+            // GPS вернулся → вернуть EKF на исходный source
+            if (have_gps_now && AP::ahrs().get_posvelyaw_source_set() == 2) {
+                AP::ahrs().set_posvelyaw_source_set(_ahl_prev_ekf_src);
+            }
+            loiter_nav->clear_pilot_desired_acceleration();
+            loiter_nav->update();
+            set_pilot_yaw_rate_time_constant();
+            attitude_control->input_euler_angle_roll_pitch_euler_rate_yaw(
+                loiter_nav->get_roll(), loiter_nav->get_pitch(), yaw_rate_cds);
+        } else {
+            // --- QSTAB DIRECT: стик отклонён → прямое управление углами ---
+            if (_ahl_loiter_active) {
+                _ahl_loiter_active = false;
+                // SRC3 остаётся если GPS нет — flow нужен для EKF
+            }
+            multicopter_attitude_rate_update(yaw_rate_cds);
+        }
+    }
 
     const uint32_t now = AP_HAL::millis();
     const float dt = plane.scheduler.get_loop_period_s();
@@ -1225,6 +1261,11 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         _ahl_ground_settle = 0;
         _ahl_touched_ground = false;
         _ahl_baro_above_ms = 0;
+        if (_ahl_loiter_active && AP::ahrs().get_posvelyaw_source_set() == 2) {
+            AP::ahrs().set_posvelyaw_source_set(_ahl_prev_ekf_src);
+        }
+        _ahl_loiter_active = false;
+        _ahl_prev_ekf_src = 0;
     }
 
     // ==== rangefinder handling ====
