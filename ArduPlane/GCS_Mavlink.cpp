@@ -1021,6 +1021,23 @@ MAV_RESULT GCS_MAVLINK_Plane::handle_command_long_packet(const mavlink_command_l
 {
     switch(packet.command) {
 
+    case 43212: {
+        // Custom: Reset EKF mag field to WMM + optional mag noise override
+        // param1: mag noise (Gauss). >0 = set override, 0 = reset only (clear override)
+        float mag_noise = packet.param1;
+
+        AP::ahrs().EKF3.resetMagFieldToWMM();
+
+        if (mag_noise > 0) {
+            AP::ahrs().EKF3.setMagNoiseOverride(mag_noise);
+        } else {
+            AP::ahrs().EKF3.clearMagNoiseOverride();
+        }
+
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "CMD 43212: mag WMM reset, noise=%.3f", mag_noise);
+        return MAV_RESULT_ACCEPTED;
+    }
+
     case MAV_CMD_DO_CHANGE_SPEED: {
         // if we're in failsafe modes (e.g., RTL, LOITER) or in pilot
         // controlled modes (e.g., MANUAL, TRAINING)

@@ -504,7 +504,8 @@ void NavEKF3_core::FuseMagnetometer()
     innovMag = MagPred - magDataDelayed.mag;
 
     // scale magnetometer observation error with total angular rate to allow for timing errors
-    const ftype R_MAG = sq(constrain_ftype(frontend->_magNoise, 0.01f, 0.5f)) + sq(frontend->magVarRateScale*imuDataDelayed.delAng.length() / imuDataDelayed.delAngDT);
+    const ftype magNoise = _mag_noise_override_active ? _mag_noise_override_value : frontend->_magNoise;
+    const ftype R_MAG = sq(constrain_ftype(magNoise, 0.01f, 0.5f)) + sq(frontend->magVarRateScale*imuDataDelayed.delAng.length() / imuDataDelayed.delAngDT);
 
     // calculate common expressions used to calculate observation jacobians an innovation variance for each component
     const Vector9 SH_MAG {

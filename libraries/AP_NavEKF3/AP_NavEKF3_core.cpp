@@ -480,6 +480,8 @@ void NavEKF3_core::InitialiseVariablesMag()
 #endif
     needMagBodyVarReset = false;
     needEarthBodyVarReset = false;
+    _mag_noise_override_active = false;
+    _mag_noise_override_value = 0.0f;
 }
 
 /*
@@ -2103,6 +2105,69 @@ void NavEKF3_core::resetMagFieldStates()
 
     // record the fact we have initialised the magnetic field states
     recordMagReset();
+}
+
+// Reset earth_magfield to WMM table values for compass decontamination
+void NavEKF3_core::resetMagFieldToWMM()
+{
+    if (!have_table_earth_field) {
+        // try to get WMM data from current position
+        const auto &loc = EKF_origin;
+        if (validOrigin) {
+            getEarthFieldTable(loc);
+        }
+    }
+
+    if (!have_table_earth_field) {
+        GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "EKF3 core%u: no WMM data, mag reset skipped", core_index);
+        return;
+    }
+
+    // save old values for debug
+    Vector3F old_ef = stateStruct.earth_magfield;
+
+    // set earth_magfield directly to WMM table values
+    stateStruct.earth_magfield = table_earth_field_ga;
+
+    // align NE components to published declination
+    alignMagStateDeclination();
+
+    // set HIGH covariance so EKF converges gradually (not a hard snap)
+    // sq(0.05) from resetMagFieldStates is too confident and causes innovation spike
+    // sq(0.15) gives EKF room to blend smoothly over several seconds
+    zeroRows(P,16,21);
+    zeroCols(P,16,21);
+    P[16][16] = sq(0.15f);
+    P[17][17] = sq(0.15f);
+    P[18][18] = sq(0.15f);
+    P[19][19] = sq(frontend->_magNoise);
+    P[20][20] = sq(frontend->_magNoise);
+    P[21][21] = sq(frontend->_magNoise);
+
+    recordMagReset();
+
+    // force re-learning from clean WMM baseline
+    magFieldLearned = false;
+
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF3 core%u: mag WMM reset ef=(%.3f,%.3f,%.3f)->(%.3f,%.3f,%.3f)",
+        core_index,
+        old_ef.x, old_ef.y, old_ef.z,
+        stateStruct.earth_magfield.x, stateStruct.earth_magfield.y, stateStruct.earth_magfield.z);
+}
+
+void NavEKF3_core::setMagNoiseOverride(float noise_gauss)
+{
+    _mag_noise_override_active = true;
+    _mag_noise_override_value = noise_gauss;
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF3 core%u: mag noise override %.3f Ga", core_index, noise_gauss);
+}
+
+void NavEKF3_core::clearMagNoiseOverride()
+{
+    if (_mag_noise_override_active) {
+        _mag_noise_override_active = false;
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF3 core%u: mag noise override cleared", core_index);
+    }
 }
 
 // zero the attitude covariances, but preserve the variances

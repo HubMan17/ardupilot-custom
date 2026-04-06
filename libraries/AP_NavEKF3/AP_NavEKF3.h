@@ -160,6 +160,15 @@ public:
     // windN/windE in m/s (NED frame), windAccuracy sets covariance.
     bool forceWindReset(float windN, float windE, float windAccuracy);
 
+    // Reset earth_magfield to WMM on all cores. For compass decontamination.
+    void resetMagFieldToWMM();
+
+    // Override mag noise on all cores. noise_gauss=0 clears override.
+    void setMagNoiseOverride(float noise_gauss);
+
+    // Clear mag noise override on all cores.
+    void clearMagNoiseOverride();
+
     // return estimated height above ground level
     // return false if ground height is not being estimated.
     bool getHAGL(float &HAGL) const;

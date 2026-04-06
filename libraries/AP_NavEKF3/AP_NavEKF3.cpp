@@ -1434,6 +1434,39 @@ bool NavEKF3::forceWindReset(float windN, float windE, float windAccuracy)
     return ret;
 }
 
+// Reset earth_magfield to WMM on all cores
+void NavEKF3::resetMagFieldToWMM()
+{
+    if (!core) {
+        return;
+    }
+    for (uint8_t i=0; i<num_cores; i++) {
+        core[i].resetMagFieldToWMM();
+    }
+}
+
+// Override mag noise on all cores
+void NavEKF3::setMagNoiseOverride(float noise_gauss)
+{
+    if (!core) {
+        return;
+    }
+    for (uint8_t i=0; i<num_cores; i++) {
+        core[i].setMagNoiseOverride(noise_gauss);
+    }
+}
+
+// Clear mag noise override on all cores
+void NavEKF3::clearMagNoiseOverride()
+{
+    if (!core) {
+        return;
+    }
+    for (uint8_t i=0; i<num_cores; i++) {
+        core[i].clearMagNoiseOverride();
+    }
+}
+
 // return estimated height above ground level
 // return false if ground height is not being estimated.
 bool NavEKF3::getHAGL(float &HAGL) const

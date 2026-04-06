@@ -237,6 +237,15 @@ public:
     // Force-set wind state. windN/windE in m/s (NED), windAccuracy sets covariance.
     bool forceWindReset(float windN, float windE, float windAccuracy);
 
+    // Reset earth_magfield to WMM table values. For compass decontamination after GPS spoofing.
+    void resetMagFieldToWMM();
+
+    // Override mag measurement noise (Gauss). Reduces compass trust during DR.
+    void setMagNoiseOverride(float noise_gauss);
+
+    // Clear mag noise override, revert to EK3_MAG_M_NSE parameter.
+    void clearMagNoiseOverride();
+
     // return estimated height above ground level
     // return false if ground height is not being estimated.
     bool getHAGL(float &HAGL) const;
@@ -1492,6 +1501,10 @@ private:
     bool have_table_earth_field;   // true when we have initialised table_earth_field_ga
     Vector3F table_earth_field_ga; // earth field from WMM tables
     ftype table_declination;       // declination in radians from the tables
+
+    // mag noise override for anti-spoof compass decontamination
+    bool _mag_noise_override_active;
+    float _mag_noise_override_value;
 
     // 1Hz update
     uint32_t last_oneHz_ms;
