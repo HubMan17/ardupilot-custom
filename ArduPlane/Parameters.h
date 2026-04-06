@@ -5,6 +5,7 @@
 #include <AP_Common/AP_Common.h>
 #include <AP_Gripper/AP_Gripper.h>
 #include "AP_DisarmProtect.h"
+#include "AP_IntegrityFilter.h"
 
 // Global parameter class.
 //
@@ -576,6 +577,9 @@ public:
 
     // disarm protection at altitude
     AP_DisarmProtect disarm_protect;
+
+    // GPS integrity filter (anti-spoof velocity cross-check)
+    AP_IntegrityFilter integrity_filter;
 
     // just to make compilation easier when all things are compiled out...
     uint8_t unused_integer;

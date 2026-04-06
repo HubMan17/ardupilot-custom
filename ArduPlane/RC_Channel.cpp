@@ -171,6 +171,7 @@ void RC_Channel_Plane::init_aux_function(const RC_Channel::aux_func_t ch_option,
     case AUX_FUNC::TRIM_TO_CURRENT_SERVO_RC:
     case AUX_FUNC::EMERGENCY_LANDING_EN:
     case AUX_FUNC::FW_AUTOTUNE:
+    case AUX_FUNC::EMERGENCY_SPOOF_OVERRIDE:
         break;
 
     case AUX_FUNC::SOARING:

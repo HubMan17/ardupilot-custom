@@ -136,6 +136,7 @@ const AP_Scheduler::Task Plane::scheduler_tasks[] = {
 #if AP_LANDINGGEAR_ENABLED
     SCHED_TASK(landing_gear_update, 5, 50, 159),
 #endif
+    SCHED_TASK_CLASS(AP_IntegrityFilter, &plane.g2.integrity_filter, update, 10, 100, 162),
 };
 
 void Plane::get_scheduler_tasks(const AP_Scheduler::Task *&tasks,

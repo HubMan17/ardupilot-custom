@@ -332,11 +332,6 @@ private:
         uint32_t AFS_last_valid_rc_ms;
     } failsafe;
 
-    // Anti-spoof emergency override state
-    bool _spoof_override_active;
-    void engage_spoof_emergency();
-    void disengage_spoof_emergency();
-
     enum Landing_ApproachStage {
         RTL,
         LOITER_TO_ALT,
@@ -1230,6 +1225,11 @@ private:
     int32_t tecs_target_alt_cm;
 
 public:
+    // Anti-spoof emergency override state
+    bool _spoof_override_active;
+    void engage_spoof_emergency();
+    void disengage_spoof_emergency();
+
     void failsafe_check(void);
 #if AP_SCRIPTING_ENABLED
     bool set_target_location(const Location& target_loc) override;

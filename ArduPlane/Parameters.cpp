@@ -1260,6 +1260,10 @@ const AP_Param::GroupInfo ParametersG2::var_info[] = {
     // @Path: AP_DisarmProtect.cpp
     AP_SUBGROUPINFO(disarm_protect, "ADisarm_", 36, ParametersG2, AP_DisarmProtect),
 
+    // @Group: INTEG_
+    // @Path: AP_IntegrityFilter.cpp
+    AP_SUBGROUPINFO(integrity_filter, "INTEG_", 37, ParametersG2, AP_IntegrityFilter),
+
     AP_GROUPEND
 };
 
