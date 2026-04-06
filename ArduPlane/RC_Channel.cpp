@@ -428,6 +428,14 @@ bool RC_Channel_Plane::do_aux_function(const aux_func_t ch_option, const AuxSwit
         }
         break;
 
+    case AUX_FUNC::EMERGENCY_SPOOF_OVERRIDE:
+        if (ch_flag == AuxSwitchPos::HIGH) {
+            plane.engage_spoof_emergency();
+        } else if (ch_flag == AuxSwitchPos::LOW) {
+            plane.disengage_spoof_emergency();
+        }
+        break;
+
     default:
         return RC_Channel::do_aux_function(ch_option, ch_flag);
     }

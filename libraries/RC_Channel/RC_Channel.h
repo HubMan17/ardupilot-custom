@@ -246,7 +246,7 @@ public:
         MAG_CAL =            171, // Calibrate compasses (disarmed only)
         BATTERY_MPPT_ENABLE = 172,// Battery MPPT Power enable. high = ON, mid = auto (controlled by mppt/batt driver), low = OFF. This effects all MPPTs.
         PLANE_AUTO_LANDING_ABORT = 173, // Abort Glide-slope or VTOL landing during payload place or do_land type mission items
-
+        EMERGENCY_SPOOF_OVERRIDE = 174, // Anti-spoof emergency override: GPS off + airspeed off + compass reset + FBWA
 
         // inputs from 200 will eventually used to replace RCMAP
         ROLL =               201, // roll input
