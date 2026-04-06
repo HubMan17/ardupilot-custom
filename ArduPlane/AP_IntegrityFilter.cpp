@@ -115,6 +115,77 @@ float AP_IntegrityFilter::compute_velocity_divergence() const
     return max_div;
 }
 
+/*
+  Compare raw GPS velocity (bypasses force_disable) against AHRS velocity.
+  Used during lockdown to detect when GPS becomes clean again.
+  GPS velocity() accessor is NOT masked by force_disable.
+*/
+float AP_IntegrityFilter::compute_recovery_divergence() const
+{
+    const auto &gps = AP::gps();
+    const auto &ahrs = AP::ahrs();
+
+    // GPS backend still provides velocity even when force-disabled,
+    // but we need valid data — check ground_speed > 0 as sanity
+    const Vector3f &gps_vel = gps.velocity();
+    if (gps_vel.length() < 0.01f && gps.ground_speed() < 0.01f) {
+        // no valid GPS data at all
+        return 99.0f;
+    }
+
+    Vector3f ekf_vel;
+    if (!ahrs.get_velocity_NED(ekf_vel)) {
+        return 99.0f;
+    }
+
+    Vector2f vel_diff(gps_vel.x - ekf_vel.x, gps_vel.y - ekf_vel.y);
+    return vel_diff.length();
+}
+
+void AP_IntegrityFilter::update_snapshots()
+{
+    const uint32_t now = AP_HAL::millis();
+
+    // save snapshots at 1Hz when trust is high
+    if (now - _last_snapshot_ms < 1000) {
+        return;
+    }
+    if (_trust < 0.8f) {
+        return;  // don't save dirty positions
+    }
+
+    const auto &gps = AP::gps();
+    if (gps.status() < AP_GPS::GPS_OK_FIX_3D) {
+        return;
+    }
+
+    _last_snapshot_ms = now;
+    Snapshot &s = _snapshots[_snapshot_idx];
+    s.time_ms = now;
+    const Location &loc = gps.location();
+    s.lat = loc.lat;
+    s.lng = loc.lng;
+    s.alt_cm = loc.alt;
+    s.velocity = gps.velocity();
+    s.trust = _trust;
+
+    _snapshot_idx = (_snapshot_idx + 1) % SNAPSHOT_SIZE;
+}
+
+bool AP_IntegrityFilter::get_clean_snapshot(Snapshot &snap) const
+{
+    // search backwards from most recent for trust > 0.8
+    for (uint8_t i = 0; i < SNAPSHOT_SIZE; i++) {
+        uint8_t idx = (_snapshot_idx + SNAPSHOT_SIZE - 1 - i) % SNAPSHOT_SIZE;
+        const Snapshot &s = _snapshots[idx];
+        if (s.time_ms != 0 && s.trust > 0.8f) {
+            snap = s;
+            return true;
+        }
+    }
+    return false;
+}
+
 AP_IntegrityFilter::Level AP_IntegrityFilter::compute_level(float trust) const
 {
     if (trust < _emerg_thresh) {
@@ -216,21 +287,41 @@ void AP_IntegrityFilter::update()
         return;
     }
 
-    // compute divergence
-    _last_divergence = compute_velocity_divergence();
+    // save clean GPS snapshots while trust is high
+    update_snapshots();
 
-    // update trust score
-    if (_last_divergence > _vel_thresh) {
-        _trust -= _decay_rate * dt;
-    } else if (_level < Level::WARNING) {
-        // only recover trust if we haven't disabled GPS yet
-        // once in WARNING+, trust stays low — recovery requires pilot RC override
-        // or future GPS_RAW velocity monitoring
-        _trust += _recover_rate * dt;
-    }
-    // in WARNING+: trust slowly decays toward EMERGENCY even without divergence data
+    // compute divergence — different methods for normal vs lockdown
     if (_level >= Level::WARNING) {
-        _trust -= _decay_rate * 0.1f * dt;  // slow decay: 10x slower than active divergence
+        // In WARNING/EMERGENCY: GPS is force-disabled, normal divergence returns 0.
+        // Use raw GPS velocity (bypasses force_disable) vs AHRS DR velocity.
+        _last_divergence = 0.0f;  // normal divergence not meaningful
+        _recovery_divergence = compute_recovery_divergence();
+
+        // Recovery logic: if raw GPS velocity matches DR velocity for 10+ seconds
+        if (_recovery_divergence < _vel_thresh) {
+            if (_recovery_good_since_ms == 0) {
+                _recovery_good_since_ms = now;
+            }
+            // require 10 seconds of consistent agreement before trust recovery
+            if (now - _recovery_good_since_ms > 10000) {
+                _trust += _recover_rate * dt;
+            }
+        } else {
+            _recovery_good_since_ms = 0;
+            // GPS still bad — slow decay continues
+            _trust -= _decay_rate * 0.1f * dt;
+        }
+    } else {
+        // Normal mode: compare GPS vs EKF
+        _last_divergence = compute_velocity_divergence();
+        _recovery_divergence = 0.0f;
+        _recovery_good_since_ms = 0;
+
+        if (_last_divergence > _vel_thresh) {
+            _trust -= _decay_rate * dt;
+        } else {
+            _trust += _recover_rate * dt;
+        }
     }
     _trust = constrain_float(_trust, 0.0f, 1.0f);
 
@@ -250,12 +341,18 @@ void AP_IntegrityFilter::update()
         _pending_level = _level;
     }
 
-    // periodic status: 5s at NOMINAL/CAUTION, 30s at WARNING/EMERGENCY to reduce GCS flood
+    // periodic status: 5s at NOMINAL/CAUTION, 30s at WARNING/EMERGENCY
     static uint32_t last_status_ms;
     const uint32_t status_interval = (_level >= Level::WARNING) ? 30000 : 5000;
     if (now - last_status_ms > status_interval) {
         last_status_ms = now;
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "INTEG: trust=%.0f%% div=%.1f lvl=%u",
-            _trust * 100.0f, _last_divergence, (unsigned)_level);
+        if (_level >= Level::WARNING) {
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "INTEG: trust=%.0f%% recov=%.1f lvl=%u%s",
+                _trust * 100.0f, _recovery_divergence, (unsigned)_level,
+                _recovery_good_since_ms ? " RECOVERING" : "");
+        } else {
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "INTEG: trust=%.0f%% div=%.1f lvl=%u",
+                _trust * 100.0f, _last_divergence, (unsigned)_level);
+        }
     }
 }

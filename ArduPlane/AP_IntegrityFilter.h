@@ -26,6 +26,19 @@ public:
 
     Level get_level() const { return _level; }
 
+    // Clean GPS snapshot structure (public for access from antispoof.cpp)
+    struct Snapshot {
+        uint32_t time_ms;
+        int32_t lat;        // degE7
+        int32_t lng;        // degE7
+        int32_t alt_cm;
+        Vector3f velocity;  // NED m/s
+        float trust;
+    };
+
+    // get last clean snapshot (trust > 0.8), returns false if none available
+    bool get_clean_snapshot(Snapshot &snap) const;
+
 private:
     // Parameters
     AP_Int8  _enable;
@@ -43,10 +56,20 @@ private:
     uint32_t _last_update_ms = 0;
     uint32_t _pending_level_start_ms = 0;
     float _last_divergence = 0.0f;
+    float _recovery_divergence = 0.0f;
     uint32_t _arm_time_ms = 0;
+    uint32_t _recovery_good_since_ms = 0;  // timestamp when recovery divergence first went low
+
+    // Clean GPS snapshot ring buffer (last known good positions)
+    static constexpr uint8_t SNAPSHOT_SIZE = 10;
+    Snapshot _snapshots[SNAPSHOT_SIZE];
+    uint8_t _snapshot_idx = 0;
+    uint32_t _last_snapshot_ms = 0;
 
     // Methods
     float compute_velocity_divergence() const;
+    float compute_recovery_divergence() const;
     Level compute_level(float trust) const;
     void execute_level_change(Level new_level, Level old_level);
+    void update_snapshots();
 };

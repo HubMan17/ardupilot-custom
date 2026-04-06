@@ -1,6 +1,6 @@
 /*
    Anti-spoof emergency override for ArduPlane.
-   Shared logic for RC_OPTION and future AP_IntegrityFilter auto-trigger.
+   Shared logic for RC_OPTION and AP_IntegrityFilter auto-trigger.
 */
 
 #include "Plane.h"
@@ -34,11 +34,29 @@ void Plane::engage_spoof_emergency()
     AP::ahrs().EKF3.resetMagFieldToWMM();
     AP::ahrs().EKF3.setMagNoiseOverride(0.15f);
 
-    // 5. Force EKF position reset to current location
-    AP::ahrs().EKF3.forcePositionReset(current_loc, 10.0f);
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: EKF pos reset to current loc");
+    // 5. Switch EKF to SRC2 (DR, no GPS) before position reset
+    AP::ahrs().EKF3.setPosVelYawSourceSet(1);
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: EKF SRC2 (DR)");
 
-    // 6. Switch to FBWA — safe manual mode without GPS dependency
+    // 6. Force EKF position reset — use clean snapshot if available
+    AP_IntegrityFilter::Snapshot snap;
+    if (g2.integrity_filter.get_clean_snapshot(snap)) {
+        Location clean_loc;
+        clean_loc.lat = snap.lat;
+        clean_loc.lng = snap.lng;
+        clean_loc.alt = snap.alt_cm;
+        // accuracy grows with age: base 10m + 0.5m/s IMU drift
+        float age_s = (AP_HAL::millis() - snap.time_ms) * 0.001f;
+        float accuracy = 10.0f + 0.5f * age_s;
+        AP::ahrs().EKF3.forcePositionReset(clean_loc, accuracy);
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: EKF reset to snapshot (%.0fs ago, acc=%.0fm)",
+            age_s, accuracy);
+    } else {
+        AP::ahrs().EKF3.forcePositionReset(current_loc, 50.0f);
+        GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "ANTI-SPOOF: no clean snapshot, reset to current loc");
+    }
+
+    // 7. Switch to FBWA — safe manual mode without GPS dependency
     set_mode(mode_fbwa, ModeReason::EMERGENCY_OVERRIDE);
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: mode FBWA");
 
@@ -53,27 +71,31 @@ void Plane::disengage_spoof_emergency()
 
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: DISENGAGED");
 
-    // 1. Re-enable GPS
+    // 1. Switch EKF back to SRC1 (GPS) before re-enabling GPS
+    AP::ahrs().EKF3.setPosVelYawSourceSet(0);
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: EKF SRC1 (GPS)");
+
+    // 2. Re-enable GPS
     AP::gps().force_disable(false);
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: GPS enabled");
 
-    // 2. Re-enable airspeed
+    // 3. Re-enable airspeed
     auto *arspd = AP::airspeed();
     if (arspd) {
         arspd->force_disable_use(false);
         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: airspeed enabled");
     }
 
-    // 3. Re-enable QuadPlane assist
+    // 4. Re-enable QuadPlane assist
 #if HAL_QUADPLANE_ENABLED
     quadplane.set_q_assist_state(quadplane.Q_ASSIST_STATE_ENUM::Q_ASSIST_ENABLED);
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: Q_ASSIST enabled");
 #endif
 
-    // 4. Clear mag noise override
+    // 5. Clear mag noise override
     AP::ahrs().EKF3.clearMagNoiseOverride();
 
-    // 5. Do NOT auto-restore flight mode — pilot decides
+    // 6. Do NOT auto-restore flight mode — pilot decides
 
     _spoof_override_active = false;
 }
