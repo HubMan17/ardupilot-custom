@@ -1,6 +1,12 @@
 /*
    Anti-spoof emergency override for ArduPlane.
    Shared logic for RC_OPTION and AP_IntegrityFilter auto-trigger.
+
+   Per-core architecture:
+     Core 0: always GPS-aided — runs pre-filter, reconverges after spoof ends
+     Core 1: DR mode during lockdown — clean attitude, never sees spoofed GPS
+   On engage: force Core 1 as primary (instant clean switch, no position reset)
+   On disengage: wait for Core 0 healthy, return to auto lane selection
 */
 
 #include "Plane.h"
@@ -13,50 +19,31 @@ void Plane::engage_spoof_emergency()
 
     GCS_SEND_TEXT(MAV_SEVERITY_EMERGENCY, "ANTI-SPOOF: ENGAGED");
 
-    // 1. Disable GPS
-    AP::gps().force_disable(true);
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: GPS disabled");
+    // 1. Force Core 1 to DR (no GPS fusion) and make it primary
+    //    Core 0 keeps GPS — pre-filter rejects spoofed data, reconverges when clean
+    //    Core 1 provides clean attitude via IMU+compass for FBWA
+    AP::ahrs().EKF3.setCoreNoGPS(1, true);
+    AP::ahrs().EKF3.forcePrimaryCore(1);
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: Core1 DR primary, Core0 GPS monitoring");
 
-    // 2. Disable airspeed sensor use
+    // 2. Disable airspeed sensor use (spoofer might affect pitot via proximity)
     auto *arspd = AP::airspeed();
     if (arspd) {
         arspd->force_disable_use(true);
         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: airspeed disabled");
     }
 
-    // 3. Disable QuadPlane assist
+    // 3. Disable QuadPlane assist (no GPS-dependent VTOL)
 #if HAL_QUADPLANE_ENABLED
     quadplane.set_q_assist_state(quadplane.Q_ASSIST_STATE_ENUM::Q_ASSIST_DISABLED);
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: Q_ASSIST disabled");
 #endif
 
-    // 4. Reset compass to WMM + noise override for DR
+    // 4. Reset compass to WMM + noise override for DR heading accuracy
     AP::ahrs().EKF3.resetMagFieldToWMM();
     AP::ahrs().EKF3.setMagNoiseOverride(0.15f);
 
-    // 5. Switch EKF to SRC2 (DR, no GPS) before position reset
-    AP::ahrs().EKF3.setPosVelYawSourceSet(1);
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: EKF SRC2 (DR)");
-
-    // 6. Force EKF position reset — use clean snapshot if available
-    AP_IntegrityFilter::Snapshot snap;
-    if (g2.integrity_filter.get_clean_snapshot(snap)) {
-        Location clean_loc;
-        clean_loc.lat = snap.lat;
-        clean_loc.lng = snap.lng;
-        clean_loc.alt = snap.alt_cm;
-        // accuracy grows with age: base 10m + 0.5m/s IMU drift
-        float age_s = (AP_HAL::millis() - snap.time_ms) * 0.001f;
-        float accuracy = 10.0f + 0.5f * age_s;
-        AP::ahrs().EKF3.forcePositionReset(clean_loc, accuracy);
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: EKF reset to snapshot (%.0fs ago, acc=%.0fm)",
-            age_s, accuracy);
-    } else {
-        AP::ahrs().EKF3.forcePositionReset(current_loc, 50.0f);
-        GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "ANTI-SPOOF: no clean snapshot, reset to current loc");
-    }
-
-    // 7. Save current mode and switch to FBWA
+    // 5. Save current mode and switch to FBWA (attitude-only, no position needed)
     _pre_spoof_mode = control_mode;
     set_mode(mode_fbwa, ModeReason::EMERGENCY_OVERRIDE);
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: mode FBWA (was %s)", _pre_spoof_mode->name());
@@ -82,13 +69,12 @@ void Plane::disengage_spoof_emergency()
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: DISENGAGED after %us",
         (unsigned)(lockdown_time / 1000));
 
-    // 1. Switch EKF back to SRC1 (GPS) before re-enabling GPS
-    AP::ahrs().EKF3.setPosVelYawSourceSet(0);
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: EKF SRC1 (GPS)");
+    // 1. Return to automatic core selection (Core 0 should have reconverged)
+    AP::ahrs().EKF3.forcePrimaryCore(-1);
 
-    // 2. Re-enable GPS
-    AP::gps().force_disable(false);
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: GPS enabled");
+    // 2. Clear Core 1 DR mode (both cores back to normal GPS fusion)
+    AP::ahrs().EKF3.setCoreNoGPS(1, false);
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: Core selection auto, GPS fusion restored");
 
     // 3. Re-enable airspeed
     auto *arspd = AP::airspeed();

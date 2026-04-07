@@ -1506,6 +1506,10 @@ private:
     bool _mag_noise_override_active;
     float _mag_noise_override_value;
 
+    // Per-core GPS disable for anti-spoof dual-core architecture
+    // When true, this core never fuses GPS data (permanent DR mode)
+    bool _force_no_gps;
+
     // GPS integrity pre-filter state (anti-spoof)
     struct {
         float trust;                    // 0.0-1.0, current trust in GPS measurements
@@ -1531,6 +1535,16 @@ private:
         // Noise scaling output
         float pos_noise_scale;          // multiplier for position noise (1.0 = normal)
         float vel_noise_scale;          // multiplier for velocity noise (1.0 = normal)
+
+        // Frozen wind reference (set once in forward flight, never updated)
+        Vector2f reference_wind;
+        bool reference_wind_set;
+
+        // CUSUM accumulators [0]=N+, [1]=N-, [2]=E+, [3]=E-
+        float cusum_wind[4];    // wind residual from EMA baseline
+        float cusum_pos[4];     // GPS-EKF position innovation
+        float cusum_vel[4];     // GPS-EKF velocity innovation
+        uint32_t cusum_reset_ms;// timestamp of last CUSUM reset (grace period)
 
         // Message rate limiting
         uint32_t last_msg_ms;

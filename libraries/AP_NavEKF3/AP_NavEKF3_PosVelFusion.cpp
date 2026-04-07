@@ -558,6 +558,12 @@ void NavEKF3_core::SelectVelPosFusion()
     fusePosData = false;
     fuseVelData = false;
 
+    // Per-core GPS disable: this core runs permanent DR for anti-spoof.
+    // GPS data is still loaded for pre-filter monitoring but never fused.
+    if (_force_no_gps && gpsDataToFuse && posxy_source == AP_NavEKF_Source::SourceXY::GPS) {
+        gpsDataToFuse = false;
+    }
+
     // Determine if we need to fuse position and velocity data on this time step
     if (gpsDataToFuse && (PV_AidingMode == AID_ABSOLUTE) && (posxy_source == AP_NavEKF_Source::SourceXY::GPS)) {
 

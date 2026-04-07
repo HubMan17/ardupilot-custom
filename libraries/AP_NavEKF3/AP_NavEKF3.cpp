@@ -933,7 +933,8 @@ void NavEKF3::UpdateFilter(void)
     const bool armed  = AP::dal().get_armed();
 
     // core selection is only available after the vehicle is armed, else forced to lane 0 if its healthy
-    if (runCoreSelection && armed) {
+    // Skip automatic selection when anti-spoof has forced a specific primary core
+    if (runCoreSelection && armed && _forced_primary < 0) {
         // update this instance's error scores for all active cores and get the primary core's error score
         float primaryErrorScore = updateCoreErrorScores();
 
@@ -1103,6 +1104,41 @@ void NavEKF3::setPosVelYawSourceSet(uint8_t source_set_idx)
         AP::dal().log_event3(AP_DAL::Event(uint8_t(AP_DAL::Event::setSourceSet0)+source_set_idx));
     }
     sources.setPosVelYawSourceSet(source_set_idx);
+}
+
+// Anti-spoof: set a specific core to never fuse GPS (permanent DR)
+void NavEKF3::setCoreNoGPS(uint8_t core_idx, bool no_gps)
+{
+    if (core && core_idx < num_cores) {
+        core[core_idx]._force_no_gps = no_gps;
+    }
+}
+
+// Anti-spoof: force a specific core as primary (-1 = auto)
+void NavEKF3::forcePrimaryCore(int8_t core_idx)
+{
+    _forced_primary = core_idx;
+    if (core && core_idx >= 0 && core_idx < (int8_t)num_cores) {
+        primary = (uint8_t)core_idx;
+    }
+}
+
+// Anti-spoof: get integrity pre-filter trust for a specific core
+float NavEKF3::getCoreIntegrityTrust(uint8_t core_idx) const
+{
+    if (core && core_idx < num_cores) {
+        return core[core_idx]._integrity.trust;
+    }
+    return 0.0f;
+}
+
+// Anti-spoof: check if a specific core is healthy
+bool NavEKF3::isCoreHealthy(uint8_t core_idx) const
+{
+    if (core && core_idx < num_cores) {
+        return core[core_idx].healthy();
+    }
+    return false;
 }
 
 // Check basic filter health metrics and return a consolidated health status

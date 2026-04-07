@@ -377,9 +377,23 @@ public:
     // get a yaw estimator instance
     const EKFGSF_yaw *get_yawEstimator(void) const;
 
+    // Anti-spoof per-core GPS control
+    // Set a specific core to never fuse GPS (permanent DR mode)
+    void setCoreNoGPS(uint8_t core_idx, bool no_gps);
+
+    // Force a specific core as primary (-1 = return to automatic selection)
+    void forcePrimaryCore(int8_t core_idx);
+
+    // Get integrity pre-filter trust for a specific core (0.0-1.0)
+    float getCoreIntegrityTrust(uint8_t core_idx) const;
+
+    // Check if a specific core is healthy
+    bool isCoreHealthy(uint8_t core_idx) const;
+
 private:
     uint8_t num_cores; // number of allocated cores
     uint8_t primary;   // current primary core
+    int8_t _forced_primary = -1; // forced primary core (-1 = auto)
     NavEKF3_core *core = nullptr;
 
     uint32_t _frameTimeUsec;        // time per IMU frame

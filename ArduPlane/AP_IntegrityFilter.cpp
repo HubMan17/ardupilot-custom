@@ -117,7 +117,8 @@ float AP_IntegrityFilter::compute_velocity_divergence()
         // 1a. DIRECT SPEED LIMIT (no baseline needed, always active)
         //     |GPS_groundspeed - airspeed| should be bounded by wind speed.
         //     Max realistic wind: ~20 m/s. Beyond that = spoofing.
-        if (airspeed > 8.0f) {
+        //     Threshold 15 m/s: above transition speed to avoid prop wash on pitot.
+        if (airspeed > 15.0f) {
             float speed_diff = fabsf(gps.ground_speed() - airspeed);
             if (speed_diff > 15.0f) {
                 // 20 m/s diff → div = 2.5, 30 m/s → div = 7.5 (instant lockdown)
@@ -127,8 +128,22 @@ float AP_IntegrityFilter::compute_velocity_divergence()
 
         // 1b. WIND BASELINE SHIFT (sensitive detection, needs warmup)
         //     Only in stable cruise (airspeed > 12 m/s, past transition)
+        //     Invalidate baseline on yaw reset (mag anomaly causes heading jump
+        //     which looks like a huge wind shift — false positive)
         if (airspeed > 12.0f) {
             float heading = ahrs.get_yaw();
+
+            // Detect yaw discontinuity: >15 deg change between updates
+            // (mag anomaly yaw reset causes heading jump → false wind shift)
+            if (_yaw_primed) {
+                float yaw_delta = fabsf(wrap_PI(heading - _prev_yaw));
+                if (yaw_delta > radians(15.0f) && _baseline_wind_valid) {
+                    _baseline_wind_valid = false;
+                    _baseline_wind_start_ms = 0;
+                }
+            }
+            _prev_yaw = heading;
+            _yaw_primed = true;
             Vector2f expected_vel(airspeed * cosf(heading), airspeed * sinf(heading));
             Vector2f gps_vel_h(gps_vel.x, gps_vel.y);
             Vector2f wind = gps_vel_h - expected_vel;
@@ -331,9 +346,10 @@ void AP_IntegrityFilter::execute_level_change(Level new_level, Level old_level)
             break;
 
         case Level::WARNING:
-            GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "INTEG: WARNING — GPS DISABLED trust=%.0f%%",
+            GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "INTEG: WARNING trust=%.0f%%",
                 _trust * 100.0f);
-            AP::gps().force_disable(true);
+            // GPS stays enabled — per-core pre-filter handles rejection.
+            // Core 0 keeps monitoring GPS for reconvergence when spoof ends.
             _prev_recovery_ms = 0;
             break;
 
@@ -358,9 +374,8 @@ void AP_IntegrityFilter::execute_level_change(Level new_level, Level old_level)
             break;
 
         case Level::WARNING:
-            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "INTEG: recovering from WARNING — GPS ENABLED trust=%.0f%%",
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "INTEG: recovering from WARNING trust=%.0f%%",
                 _trust * 100.0f);
-            AP::gps().force_disable(false);
             break;
 
         case Level::CAUTION:
@@ -395,6 +410,8 @@ void AP_IntegrityFilter::update()
         _arm_time_ms = 0;
         _baseline_wind_valid = false;
         _baseline_wind_start_ms = 0;
+        _prev_yaw = 0.0f;
+        _yaw_primed = false;
         _baseline_alt_valid = false;
         _baseline_alt_start_ms = 0;
         _baseline_jitter_valid = false;
