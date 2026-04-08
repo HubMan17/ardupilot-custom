@@ -70,6 +70,8 @@ private:
     Vector2f _baseline_wind;
     bool _baseline_wind_valid = false;
     uint32_t _baseline_wind_start_ms = 0;  // when baseline was first set
+    float _prev_yaw = 0.0f;               // previous heading for yaw discontinuity detection
+    bool _yaw_primed = false;              // true after first yaw sample
 
     // Altitude cross-check: baseline GPS-baro altitude difference
     float _baseline_alt_diff = 0.0f;
@@ -86,6 +88,13 @@ private:
     // Instant lockdown: high-divergence sustained timer
     uint32_t _high_div_since_ms = 0;
 
+    // Rapid trust drop tracker: skip hysteresis when trust crashes fast
+    float _trust_5s_ago = 1.0f;
+    uint32_t _trust_history_ms = 0;
+
+    // Pre-filter shortcut: both EKF cores trust < 40% sustained timer
+    uint32_t _prefilter_low_since_ms = 0;
+
     // Recovery delta-comparison state
     Vector3f _prev_gps_vel;
     Vector3f _prev_ahrs_vel;
@@ -96,6 +105,6 @@ private:
     float compute_velocity_divergence();
     float compute_recovery_divergence();
     Level compute_level(float trust) const;
-    void execute_level_change(Level new_level, Level old_level);
+    bool execute_level_change(Level new_level, Level old_level);  // false if blocked
     void update_snapshots();
 };

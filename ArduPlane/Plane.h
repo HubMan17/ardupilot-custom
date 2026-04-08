@@ -1230,7 +1230,7 @@ public:
     uint32_t _spoof_engage_ms;  // timestamp of engage for minimum lockdown time
     Mode *_pre_spoof_mode = nullptr;  // saved mode for auto-restore after recovery
     void engage_spoof_emergency();
-    void disengage_spoof_emergency();
+    bool disengage_spoof_emergency();  // returns true if actually disengaged
 
     void failsafe_check(void);
 #if AP_SCRIPTING_ENABLED

@@ -52,22 +52,44 @@ void Plane::engage_spoof_emergency()
     _spoof_engage_ms = AP_HAL::millis();
 }
 
-void Plane::disengage_spoof_emergency()
+bool Plane::disengage_spoof_emergency()
 {
     if (!_spoof_override_active) {
-        return;
+        return true;
     }
 
-    // minimum lockdown time 5 seconds to prevent instant disengage from RC bounce
-    const uint32_t lockdown_time = AP_HAL::millis() - _spoof_engage_ms;
-    if (lockdown_time < 5000) {
-        GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "ANTI-SPOOF: disengage blocked, lockdown %us",
-            (unsigned)(lockdown_time / 1000));
-        return;
+    const uint32_t now = AP_HAL::millis();
+    const uint32_t lockdown_time = now - _spoof_engage_ms;
+
+    // Minimum lockdown 30 seconds — prevents rapid engage/disengage oscillation
+    // that was crashing aircraft (old 5s allowed disengage while spoof still active)
+    if (lockdown_time < 30000) {
+        static uint32_t last_blocked_msg_ms;
+        if (now - last_blocked_msg_ms > 5000) {
+            last_blocked_msg_ms = now;
+            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "ANTI-SPOOF: disengage blocked, lockdown %us/30s",
+                (unsigned)(lockdown_time / 1000));
+        }
+        return false;
     }
 
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: DISENGAGED after %us",
-        (unsigned)(lockdown_time / 1000));
+    // Core 0 pre-filter trust must show GPS is clean before we restore GPS fusion.
+    // Core 0 keeps running GPS through pre-filter during lockdown.
+    // If pre-filter still rejecting (trust < 80%), spoof is still active.
+    float core0_trust = AP::ahrs().EKF3.getCoreIntegrityTrust(0);
+    if (core0_trust < 0.8f) {
+        static uint32_t last_core_msg_ms;
+        if (now - last_core_msg_ms > 5000) {
+            last_core_msg_ms = now;
+            GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
+                "ANTI-SPOOF: disengage blocked, Core0 trust=%.0f%% (need >80%%)",
+                core0_trust * 100.0f);
+        }
+        return false;
+    }
+
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ANTI-SPOOF: DISENGAGED after %us (Core0 trust=%.0f%%)",
+        (unsigned)(lockdown_time / 1000), core0_trust * 100.0f);
 
     // 1. Return to automatic core selection (Core 0 should have reconverged)
     AP::ahrs().EKF3.forcePrimaryCore(-1);
@@ -100,4 +122,5 @@ void Plane::disengage_spoof_emergency()
     }
 
     _spoof_override_active = false;
+    return true;
 }

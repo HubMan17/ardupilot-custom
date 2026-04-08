@@ -335,7 +335,7 @@ AP_IntegrityFilter::Level AP_IntegrityFilter::compute_level(float trust) const
     return Level::NOMINAL;
 }
 
-void AP_IntegrityFilter::execute_level_change(Level new_level, Level old_level)
+bool AP_IntegrityFilter::execute_level_change(Level new_level, Level old_level)
 {
     // escalating up
     if (new_level > old_level) {
@@ -368,9 +368,13 @@ void AP_IntegrityFilter::execute_level_change(Level new_level, Level old_level)
     else {
         switch (old_level) {
         case Level::EMERGENCY:
+            // disengage returns false if blocked (min lockdown time, Core 0 still bad)
+            if (!plane.disengage_spoof_emergency()) {
+                // Disengage blocked — do NOT change level, stay in EMERGENCY
+                return false;
+            }
             GCS_SEND_TEXT(MAV_SEVERITY_INFO, "INTEG: recovering from EMERGENCY trust=%.0f%%",
                 _trust * 100.0f);
-            plane.disengage_spoof_emergency();
             break;
 
         case Level::WARNING:
@@ -386,6 +390,7 @@ void AP_IntegrityFilter::execute_level_change(Level new_level, Level old_level)
             break;
         }
     }
+    return true;
 }
 
 void AP_IntegrityFilter::update()
@@ -417,6 +422,9 @@ void AP_IntegrityFilter::update()
         _baseline_jitter_valid = false;
         _jitter_primed = false;
         _high_div_since_ms = 0;
+        _trust_5s_ago = 1.0f;
+        _trust_history_ms = 0;
+        _prefilter_low_since_ms = 0;
         return;
     }
 
@@ -436,12 +444,51 @@ void AP_IntegrityFilter::update()
     // save clean GPS snapshots while trust is high
     update_snapshots();
 
+    // ---- PRE-FILTER SHORTCUT: both EKF cores see spoof → instant lockdown ----
+    // Pre-filter (echelon 1) runs per-core at GPS rate and detects faster than
+    // echelon 2.  If BOTH cores report trust < 40% sustained for >2s, go
+    // straight to EMERGENCY without waiting for echelon 2 trust to decay
+    // through CAUTION → WARNING → EMERGENCY (which took 13+ seconds and was
+    // too late in testing — aircraft crashed before lockdown engaged).
+    if (_level < Level::EMERGENCY && !plane._spoof_override_active) {
+        const auto &ekf3 = AP::ahrs().EKF3;
+        // Only run if we have 2+ cores (single-core returns 0.0 for missing core)
+        float core0_trust = ekf3.getCoreIntegrityTrust(0);
+        float core1_trust = ekf3.getCoreIntegrityTrust(1);
+        bool have_two_cores = ekf3.activeCores() >= 2;
+
+        if (have_two_cores && core0_trust < 0.4f && core1_trust < 0.4f) {
+            if (_prefilter_low_since_ms == 0) {
+                _prefilter_low_since_ms = now;
+            } else if (now - _prefilter_low_since_ms > 2000) {
+                GCS_SEND_TEXT(MAV_SEVERITY_EMERGENCY,
+                    "INTEG: PRE-FILTER SHORTCUT c0=%.0f%% c1=%.0f%% >2s",
+                    core0_trust * 100.0f, core1_trust * 100.0f);
+                _trust = 0.0f;
+                execute_level_change(Level::EMERGENCY, _level);
+                _level = Level::EMERGENCY;
+                _pending_level = Level::EMERGENCY;
+                _prefilter_low_since_ms = 0;
+            }
+        } else {
+            _prefilter_low_since_ms = 0;
+        }
+    }
+
     // compute divergence — different methods for normal vs lockdown
     if (_level >= Level::WARNING) {
         _last_divergence = 0.0f;
         _recovery_divergence = compute_recovery_divergence();
 
-        if (_recovery_divergence < _vel_thresh) {
+        // Recovery gate: Core 0 pre-filter trust must be > 80%.
+        // Core 0 keeps GPS fusion during lockdown (pre-filter rejects spoofed data).
+        // If Core 0 trust is still low, GPS is still bad — do NOT recover.
+        // recovery_divergence alone is unreliable (returns 0.0 during steady spoof
+        // because both GPS and AHRS velocity deltas are small).
+        float core0_prefilter = AP::ahrs().EKF3.getCoreIntegrityTrust(0);
+        bool core0_clean = core0_prefilter > 0.8f;
+
+        if (_recovery_divergence < _vel_thresh && core0_clean) {
             if (_recovery_good_since_ms == 0) {
                 _recovery_good_since_ms = now;
             }
@@ -450,7 +497,13 @@ void AP_IntegrityFilter::update()
             }
         } else {
             _recovery_good_since_ms = 0;
-            _trust -= _decay_rate * 0.1f * dt;
+            if (!core0_clean) {
+                // Core 0 still sees bad GPS — keep trust pinned low
+                _trust = MIN(_trust, _emerg_thresh * 0.5f);
+            } else {
+                // Full decay rate in WARNING/EMERGENCY
+                _trust -= _decay_rate * dt;
+            }
         }
     } else {
         // Normal mode: cross-check GPS vs independent sensors
@@ -486,30 +539,51 @@ void AP_IntegrityFilter::update()
     }
     _trust = constrain_float(_trust, 0.0f, 1.0f);
 
+    // Track trust from 5 seconds ago for rapid-drop detection
+    if (now - _trust_history_ms >= 5000) {
+        _trust_5s_ago = _trust;
+        _trust_history_ms = now;
+    }
+
     // determine target level (for gradual escalation path)
     Level target = compute_level(_trust);
 
-    // hysteresis: require level to be sustained for 1 second
+    // Rapid trust drop: if trust fell >50% in 5s, skip hysteresis for EMERGENCY
+    // This catches the scenario where detection is solid but hysteresis delays lockdown
+    bool rapid_drop = (_trust_5s_ago - _trust) > 0.5f;
+
     if (target != _level) {
-        if (target != _pending_level) {
+        if (rapid_drop && target >= Level::EMERGENCY) {
+            // Skip hysteresis — trust crashed, engage immediately
+            GCS_SEND_TEXT(MAV_SEVERITY_EMERGENCY,
+                "INTEG: RAPID DROP %.0f%%->%.0f%% in 5s, skip hysteresis",
+                _trust_5s_ago * 100.0f, _trust * 100.0f);
+            if (execute_level_change(target, _level)) {
+                _level = target;
+                _pending_level = target;
+            }
+        } else if (target != _pending_level) {
             _pending_level = target;
             _pending_level_start_ms = now;
         } else if (now - _pending_level_start_ms > 1000) {
-            execute_level_change(target, _level);
-            _level = target;
+            if (execute_level_change(target, _level)) {
+                _level = target;
+            }
         }
     } else {
         _pending_level = _level;
     }
 
-    // periodic status: 5s at NOMINAL/CAUTION, 30s at WARNING/EMERGENCY
+    // periodic status: 5s at NOMINAL/CAUTION, 10s at WARNING/EMERGENCY
     static uint32_t last_status_ms;
-    const uint32_t status_interval = (_level >= Level::WARNING) ? 30000 : 5000;
+    const uint32_t status_interval = (_level >= Level::WARNING) ? 10000 : 5000;
     if (now - last_status_ms > status_interval) {
         last_status_ms = now;
         if (_level >= Level::WARNING) {
-            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "INTEG: trust=%.0f%% recov=%.1f lvl=%u%s",
-                _trust * 100.0f, _recovery_divergence, (unsigned)_level,
+            float c0t = AP::ahrs().EKF3.getCoreIntegrityTrust(0);
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "INTEG: trust=%.0f%% recov=%.1f c0=%.0f%% lvl=%u%s",
+                _trust * 100.0f, _recovery_divergence, c0t * 100.0f,
+                (unsigned)_level,
                 _recovery_good_since_ms ? " RECOVERING" : "");
         } else {
             GCS_SEND_TEXT(MAV_SEVERITY_INFO, "INTEG: trust=%.0f%% div=%.1f lvl=%u",

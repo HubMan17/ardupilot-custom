@@ -226,11 +226,19 @@ void NavEKF3_core::updateIntegrityPreFilter()
         (now_ms - _integrity.baseline_wind_start_ms >= INTEGRITY_BASELINE_MATURE_MS);
 
     if (!run_airspeed_checks && innovation_score < 1.0f) {
-        // No forward flight AND no innovation alarm — pass through
-        _integrity.trust = 1.0f;
+        // No forward flight AND no innovation alarm — hold current state.
+        // CRITICAL: do NOT reset trust to 1.0 here.  During VTOL transitions
+        // airspeed drops below gate → this path fires → any accumulated trust
+        // decay gets wiped, letting spoofed GPS re-enter at full weight.
+        // This was the root cause of trust oscillating at ~45% forever:
+        // detect → transition → reset → detect → transition → reset...
+        // Natural recovery (0.1/s) will restore trust if GPS is clean.
+        if (_integrity.trust >= 1.0f) {
+            // Only set noise scaling to 1× if trust was never degraded
+            _integrity.pos_noise_scale = 1.0f;
+            _integrity.vel_noise_scale = 1.0f;
+        }
         _integrity.divergence = 0.0f;
-        _integrity.pos_noise_scale = 1.0f;
-        _integrity.vel_noise_scale = 1.0f;
         return;
     }
 
@@ -336,7 +344,7 @@ void NavEKF3_core::updateIntegrityPreFilter()
     _integrity.trust = constrain_float(_integrity.trust, 0.0f, 1.0f);
 
     // ---- BASELINE RESET ----
-    if (_integrity.trust < 0.05f || max_score > 5.0f) {
+    if (_integrity.trust < 0.25f || max_score > 5.0f) {
         _integrity.baseline_wind_valid = false;
         _integrity.baseline_alt_valid = false;
         _integrity.baseline_jitter_valid = false;
@@ -348,7 +356,10 @@ void NavEKF3_core::updateIntegrityPreFilter()
     }
 
     // ---- NOISE SCALING / REJECTION ----
-    if (_integrity.trust < 0.05f) {
+    // Reject GPS entirely when trust < 25%.  At 25% the spoof is confirmed —
+    // continuing to fuse with 4× noise still corrupts the EKF state.
+    // Old threshold (5%) let spoofed data leak through for too long.
+    if (_integrity.trust < 0.25f) {
         // Full rejection — do not fuse GPS at all
         gpsDataToFuse = false;
         fusePosData = false;
@@ -364,7 +375,7 @@ void NavEKF3_core::updateIntegrityPreFilter()
         _integrity.pos_noise_scale = 1.0f;
         _integrity.vel_noise_scale = 1.0f;
     } else {
-        float scale = 1.0f / MAX(_integrity.trust, 0.05f);
+        float scale = 1.0f / MAX(_integrity.trust, 0.25f);
         _integrity.pos_noise_scale = scale;
         _integrity.vel_noise_scale = scale;
 
