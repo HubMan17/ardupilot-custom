@@ -1206,6 +1206,12 @@ void QuadPlane::hold_stabilize(float throttle_in)
 void QuadPlane::hold_auto_help_land(float throttle_in)
 {
     // ---- hybrid attitude: QSTAB direct control OR loiter position hold ----
+    // Два режима attitude:
+    //  1) Стик отклонён → QSTAB (прямое управление углами)
+    //  2) Стик центр → loiter hold с рампой входа (1с blend 0→1)
+    // Рампа решает проблему: после полёта стиком аппарат имеет скорость,
+    // loiter velocity braking мгновенно командует 20-40° крен.
+    // С рампой коррекции нарастают плавно + clamp к ANGLE_MAX.
     {
         const float yaw_rate_cds = get_desired_yaw_rate_cds(false);
         const int16_t roll_in = plane.channel_roll->get_control_in();
@@ -1213,36 +1219,77 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
         const float stick_norm = norm((float)roll_in, (float)pitch_in);
         const bool sticks_centered = (stick_norm < 100.0f);
         const bool have_gps_now = AP::gps().status() >= AP_GPS::GPS_OK_FIX_2D;
+        const float dt = plane.scheduler.get_loop_period_s();
 
-        if (sticks_centered) {
-            // --- LOITER HOLD: стик отпущен → удержание позиции ---
+        // --- EKF source management (независимо от стика) ---
+        if (!have_gps_now && AP::ahrs().get_posvelyaw_source_set() != 2) {
+            _ahl_prev_ekf_src = AP::ahrs().get_posvelyaw_source_set();
+            AP::ahrs().set_posvelyaw_source_set(2);
+            loiter_nav->init_target();
+        }
+        if (have_gps_now && AP::ahrs().get_posvelyaw_source_set() == 2) {
+            AP::ahrs().set_posvelyaw_source_set(_ahl_prev_ekf_src);
+            loiter_nav->init_target();
+        }
+
+        // Проверка готовности EKF: нужна хотя бы валидная скорость.
+        // После SRC switch (напр. GPS→OptFlow) EKF-у нужно ~0.3с
+        // чтобы начать фьюзить новый источник. До этого SS=0 (мусор).
+        // Если запустить loiter по мусору — init_target() запомнит
+        // мусорную позицию и аппарат полетит "назад" к фантомной точке.
+        nav_filter_status filt_status;
+        AP::ahrs().get_filter_status(filt_status);
+        const bool ekf_vel_ok = filt_status.flags.horiz_vel;
+
+        if (!sticks_centered) {
+            // --- QSTAB DIRECT: стик отклонён → прямое управление углами ---
+            _ahl_loiter_active = false;
+            _ahl_loiter_ramp = 0.0f;
+            loiter_nav->init_target();
+            loiter_nav->update();
+            multicopter_attitude_rate_update(yaw_rate_cds);
+        } else if (!ekf_vel_ok) {
+            // --- EKF НЕ ГОТОВ: QSTAB level hold ---
+            // После SRC switch EKF ещё не фьюзит оптик флоу/GPS.
+            // Loiter по мусорным данным опасен. Держим горизонт.
+            _ahl_loiter_active = false;
+            _ahl_loiter_ramp = 0.0f;
+            loiter_nav->init_target();
+            multicopter_attitude_rate_update(yaw_rate_cds);
+        } else {
+            // --- LOITER HOLD: стик отпущен + EKF готов → удержание позиции ---
+            // Работает с GPS (SRC1) и без GPS (SRC3: optical flow + rangefinder).
+            // Без GPS позиция медленно дрейфует (OF даёт только скорость),
+            // но для кратковременного удержания этого достаточно.
             if (!_ahl_loiter_active) {
                 loiter_nav->init_target();
                 _ahl_loiter_active = true;
+                _ahl_loiter_ramp = 0.0f;
             }
-            // Без GPS → переключить EKF на SRC3 (каждый кадр, ловит потерю GPS в loiter)
-            if (!have_gps_now && AP::ahrs().get_posvelyaw_source_set() != 2) {
-                _ahl_prev_ekf_src = AP::ahrs().get_posvelyaw_source_set();
-                AP::ahrs().set_posvelyaw_source_set(2);
-                loiter_nav->init_target();  // re-init на новом EKF source
-            }
-            // GPS вернулся → вернуть EKF на исходный source
-            if (have_gps_now && AP::ahrs().get_posvelyaw_source_set() == 2) {
-                AP::ahrs().set_posvelyaw_source_set(_ahl_prev_ekf_src);
-                loiter_nav->init_target();  // re-init на GPS source
-            }
+
+            // Рампа 0→1 за 1 секунду: плавный вход в loiter после QSTAB.
+            // Без рампы: остаточная скорость от стика → мгновенная коррекция
+            // loiter velocity controller → 20-40° крен (превышение ANGLE_MAX).
+            // С рампой: коррекции нарастают плавно, аппарат замедляется мягко.
+            const float ramp_time = 1.0f;
+            _ahl_loiter_ramp = MIN(_ahl_loiter_ramp + dt / ramp_time, 1.0f);
+
             loiter_nav->clear_pilot_desired_acceleration();
             loiter_nav->update();
             set_pilot_yaw_rate_time_constant();
+
+            // Выход loiter → blend с нулём через рампу + clamp к ANGLE_MAX.
+            // Clamp нужен потому что loiter velocity braking игнорирует ANGLE_MAX
+            // и может командовать 20-28° при Q_ANGLE_MAX=20°.
+            float loit_roll_cd  = loiter_nav->get_roll()  * _ahl_loiter_ramp;
+            float loit_pitch_cd = loiter_nav->get_pitch() * _ahl_loiter_ramp;
+
+            const float angle_max_cd = aparm.angle_max;
+            loit_roll_cd  = constrain_float(loit_roll_cd,  -angle_max_cd, angle_max_cd);
+            loit_pitch_cd = constrain_float(loit_pitch_cd, -angle_max_cd, angle_max_cd);
+
             attitude_control->input_euler_angle_roll_pitch_euler_rate_yaw(
-                loiter_nav->get_roll(), loiter_nav->get_pitch(), yaw_rate_cds);
-        } else {
-            // --- QSTAB DIRECT: стик отклонён → прямое управление углами ---
-            if (_ahl_loiter_active) {
-                _ahl_loiter_active = false;
-                // SRC3 остаётся если GPS нет — flow нужен для EKF
-            }
-            multicopter_attitude_rate_update(yaw_rate_cds);
+                loit_roll_cd, loit_pitch_cd, yaw_rate_cds);
         }
     }
 
@@ -1267,6 +1314,7 @@ void QuadPlane::hold_auto_help_land(float throttle_in)
             AP::ahrs().set_posvelyaw_source_set(_ahl_prev_ekf_src);
         }
         _ahl_loiter_active = false;
+        _ahl_loiter_ramp = 0.0f;
         _ahl_prev_ekf_src = 0;
     }
 
