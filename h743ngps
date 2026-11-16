@@ -1,0 +1,29 @@
+name: Build MatekH743 Plane
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip python3-dev gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi
+          pip3 install empy==3.3.4 pexpect future intelhex
+
+      - name: Configure and Build
+        run: |
+          ./waf configure --board MatekH743
+          ./waf plane
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: MatekH743-arduplane
+          path: build/MatekH743/bin/arduplane*
