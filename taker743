@@ -1,0 +1,89 @@
+name: Build ArduPlane for TAKER H743 MINI
+
+on:
+  workflow_dispatch:
+    inputs:
+      ardupilot_ref:
+        description: "Ветка, тег или commit SHA ArduPilot (например: master, Plane-4.5)"
+        required: true
+        default: "master"
+      board_target:
+        description: "Имя платы в hwdef (например: TakerH743mini или MatekH743)"
+        required: true
+        default: "TakerH743mini"
+      build_bootloader:
+        description: "Также собрать bootloader (true/false)"
+        required: false
+        default: "false"
+
+jobs:
+  build-plane:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout your repository (if using custom hwdef/patches)
+        uses: actions/checkout@v4
+        with:
+          path: custom_overlay
+
+      - name: Checkout ArduPilot
+        uses: actions/checkout@v4
+        with:
+          repository: ArduPilot/ardupilot
+          ref: ${{ inputs.ardupilot_ref }}
+          submodules: recursive
+          path: ardupilot
+
+      - name: Apply custom hwdef if present in overlay
+        working-directory: ardupilot
+        run: |
+          TARGET="${{ inputs.board_target }}"
+          if [ -d "../custom_overlay/hwdef/${TARGET}" ]; then
+            echo "Copying custom hwdef/${TARGET} into ArduPilot..."
+            cp -r "../custom_overlay/hwdef/${TARGET}" "libraries/AP_HAL_ChibiOS/hwdef/${TARGET}"
+          else
+            echo "No custom hwdef/${TARGET} in overlay; expecting it in ArduPilot source."
+          fi
+
+      - name: Cache ccache and ARM toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ccache
+            /opt/gcc-arm-none-eabi
+          key: ardupilot-h743-${{ runner.os }}-${{ hashFiles('ardupilot/Tools/environment_install/install-prereqs-ubuntu.sh') }}
+
+      - name: Install build prerequisites
+        working-directory: ardupilot
+        env:
+          SKIP_AP_GRAPHIC_ENV: "1"
+          SKIP_AP_SIM_ENV: "1"
+          USER: root
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          ./Tools/environment_install/install-prereqs-ubuntu.sh -y
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "/opt/gcc-arm-none-eabi/bin" >> "$GITHUB_PATH"
+
+      - name: Configure and build ArduPlane
+        working-directory: ardupilot
+        run: |
+          export PATH="$HOME/.local/bin:/opt/gcc-arm-none-eabi/bin:$PATH"
+          ./waf configure --board="${{ inputs.board_target }}"
+          ./waf plane
+
+      - name: Build Bootloader (optional)
+        if: ${{ inputs.build_bootloader == 'true' }}
+        working-directory: ardupilot
+        run: |
+          export PATH="$HOME/.local/bin:/opt/gcc-arm-none-eabi/bin:$PATH"
+          ./waf configure --board="${{ inputs.board_target }}" --bootloader
+          ./waf bootloader
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: arduplane-${{ inputs.board_target }}-${{ github.run_id }}
+          path: |
+            ardupilot/build/${{ inputs.board_target }}/bin/arduplane*
+            ardupilot/build/${{ inputs.board_target }}/bin/*_bl.*
+          if-no-files-found: warn
